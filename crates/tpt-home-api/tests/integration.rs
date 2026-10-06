@@ -1,0 +1,461 @@
+// SPDX-License-Identifier: MIT OR Apache-2.0
+// Copyright (c) 2026 TPT Solutions
+
+//! End-to-end API tests over `build_router` (no network): bootstrap, login,
+//! sessions, user administration and the middleware guards.
+
+use axum::body::Body;
+use axum::http::{Request, StatusCode};
+use http_body_util::BodyExt;
+use serde_json::{Value, json};
+use std::sync::OnceLock;
+use tower::ServiceExt;
+
+use tpt_home_api::build_router;
+use tpt_home_core::config::Config;
+use tpt_home_core::db::{DbPool, connect_in_memory};
+
+fn test_config() -> &'static Config {
+    static CFG: OnceLock<Config> = OnceLock::new();
+    CFG.get_or_init(|| {
+        let dir = tempfile::tempdir().unwrap();
+        let data_dir = dir.path().to_path_buf();
+        std::mem::forget(dir); // lives for the whole test process
+        Config {
+            data_dir,
+            ..Config::default()
+        }
+    })
+}
+
+async fn router() -> axum::Router {
+    tpt_home_core::config::set_global_for_tests(test_config().clone());
+    let db: DbPool = connect_in_memory().await.unwrap();
+    tpt_home_core::migrate::run_all(&db).await.unwrap();
+    build_router(db, test_config())
+}
+
+async fn body_json(res: axum::response::Response) -> Value {
+    let bytes = res.into_body().collect().await.unwrap().to_bytes();
+    serde_json::from_slice(&bytes).unwrap_or(Value::Null)
+}
+
+fn json_request(method: &str, uri: &str, body: Value, cookie: Option<&str>) -> Request<Body> {
+    let mut builder = Request::builder()
+        .method(method)
+        .uri(uri)
+        .header("content-type", "application/json");
+    if let Some(c) = cookie {
+        builder = builder.header("cookie", c);
+    }
+    builder.body(Body::from(body.to_string())).unwrap()
+}
+
+async fn setup_and_login(router: &axum::Router) -> String {
+    let res = router
+        .clone()
+        .oneshot(json_request(
+            "POST",
+            "/api/setup",
+            json!({"username": "admin", "password": "hunter2hunter2"}),
+            None,
+        ))
+        .await
+        .unwrap();
+    assert_eq!(res.status(), StatusCode::CREATED, "setup failed");
+    res.headers()
+        .get("set-cookie")
+        .unwrap()
+        .to_str()
+        .unwrap()
+        .split(';')
+        .next()
+        .unwrap()
+        .to_string()
+}
+
+#[tokio::test]
+async fn healthz_is_public() {
+    let res = router()
+        .await
+        .oneshot(
+            Request::builder()
+                .uri("/healthz")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(res.status(), StatusCode::OK);
+    let v = body_json(res).await;
+    assert_eq!(v["ok"], json!(true));
+    assert_eq!(v["service"], json!("tpt-homestack"));
+}
+
+#[tokio::test]
+async fn setup_only_works_once() {
+    let app = router().await;
+    let cookie = setup_and_login(&app).await;
+    assert!(cookie.starts_with("tpt_session="));
+
+    let res = app
+        .clone()
+        .oneshot(json_request(
+            "POST",
+            "/api/setup",
+            json!({"username": "evil", "password": "hunter2hunter2"}),
+            None,
+        ))
+        .await
+        .unwrap();
+    assert_eq!(res.status(), StatusCode::NOT_FOUND);
+}
+
+#[tokio::test]
+async fn protected_endpoints_require_auth() {
+    let app = router().await;
+    let res = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri("/api/auth/me")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(res.status(), StatusCode::UNAUTHORIZED);
+
+    // Pages redirect to /login instead.
+    let res = app
+        .oneshot(
+            Request::builder()
+                .uri("/dashboard")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(res.status(), StatusCode::SEE_OTHER);
+    assert_eq!(res.headers().get("location").unwrap(), "/login");
+}
+
+#[tokio::test]
+async fn login_me_logout_flow() {
+    let app = router().await;
+    let _ = setup_and_login(&app).await;
+
+    // Wrong password → 401.
+    let res = app
+        .clone()
+        .oneshot(json_request(
+            "POST",
+            "/api/auth/login",
+            json!({"username": "admin", "password": "wrong-password"}),
+            None,
+        ))
+        .await
+        .unwrap();
+    assert_eq!(res.status(), StatusCode::UNAUTHORIZED);
+
+    // Correct password → cookie.
+    let res = app
+        .clone()
+        .oneshot(json_request(
+            "POST",
+            "/api/auth/login",
+            json!({"username": "admin", "password": "hunter2hunter2"}),
+            None,
+        ))
+        .await
+        .unwrap();
+    assert_eq!(res.status(), StatusCode::OK);
+    let cookie = res
+        .headers()
+        .get("set-cookie")
+        .unwrap()
+        .to_str()
+        .unwrap()
+        .to_string();
+    let cookie = cookie.split(';').next().unwrap().to_string();
+
+    let res = app
+        .clone()
+        .oneshot(json_request(
+            "GET",
+            "/api/auth/me",
+            Value::Null,
+            Some(&cookie),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(res.status(), StatusCode::OK);
+    let me = body_json(res).await;
+    assert_eq!(me["username"], json!("admin"));
+    assert_eq!(me["role"], json!("admin"));
+
+    // Logout revokes the session.
+    let res = app
+        .clone()
+        .oneshot(json_request(
+            "POST",
+            "/api/auth/logout",
+            json!({}),
+            Some(&cookie),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(res.status(), StatusCode::OK);
+    let res = app
+        .oneshot(json_request(
+            "GET",
+            "/api/auth/me",
+            Value::Null,
+            Some(&cookie),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(res.status(), StatusCode::UNAUTHORIZED);
+}
+
+#[tokio::test]
+async fn admin_user_management() {
+    let app = router().await;
+    let cookie = setup_and_login(&app).await;
+
+    // Create a normal user.
+    let res = app
+        .clone()
+        .oneshot(json_request(
+            "POST",
+            "/api/admin/users",
+            json!({"username": "alice", "password": "alice-password", "role": "user"}),
+            Some(&cookie),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(res.status(), StatusCode::CREATED);
+    let created = body_json(res).await;
+    let alice_id = created["id"].as_i64().unwrap();
+
+    // List shows both.
+    let res = app
+        .clone()
+        .oneshot(json_request(
+            "GET",
+            "/api/admin/users",
+            Value::Null,
+            Some(&cookie),
+        ))
+        .await
+        .unwrap();
+    let users = body_json(res).await;
+    assert_eq!(users.as_array().unwrap().len(), 2);
+
+    // Disable alice → her login fails.
+    let res = app
+        .clone()
+        .oneshot(json_request(
+            "PATCH",
+            &format!("/api/admin/users/{alice_id}"),
+            json!({"disabled": true}),
+            Some(&cookie),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(res.status(), StatusCode::OK);
+    let res = app
+        .clone()
+        .oneshot(json_request(
+            "POST",
+            "/api/auth/login",
+            json!({"username": "alice", "password": "alice-password"}),
+            None,
+        ))
+        .await
+        .unwrap();
+    assert_eq!(res.status(), StatusCode::UNAUTHORIZED);
+
+    // Cannot demote the last admin.
+    let res = app
+        .clone()
+        .oneshot(json_request(
+            "PATCH",
+            "/api/admin/users/1",
+            json!({"role": "user"}),
+            Some(&cookie),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(res.status(), StatusCode::CONFLICT);
+
+    // Cannot delete self; cannot delete the last admin.
+    let res = app
+        .clone()
+        .oneshot(json_request(
+            "DELETE",
+            "/api/admin/users/1",
+            Value::Null,
+            Some(&cookie),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(res.status(), StatusCode::CONFLICT);
+
+    // Delete alice works.
+    let res = app
+        .clone()
+        .oneshot(json_request(
+            "DELETE",
+            &format!("/api/admin/users/{alice_id}"),
+            Value::Null,
+            Some(&cookie),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(res.status(), StatusCode::OK);
+}
+
+#[tokio::test]
+async fn non_admin_cannot_manage_users() {
+    let app = router().await;
+    let admin_cookie = setup_and_login(&app).await;
+
+    // Admin creates a normal user and logs in as them.
+    let _ = app
+        .clone()
+        .oneshot(json_request(
+            "POST",
+            "/api/admin/users",
+            json!({"username": "bob", "password": "bob-password-1", "role": "user"}),
+            Some(&admin_cookie),
+        ))
+        .await
+        .unwrap();
+    let res = app
+        .clone()
+        .oneshot(json_request(
+            "POST",
+            "/api/auth/login",
+            json!({"username": "bob", "password": "bob-password-1"}),
+            None,
+        ))
+        .await
+        .unwrap();
+    let bob_cookie = res
+        .headers()
+        .get("set-cookie")
+        .unwrap()
+        .to_str()
+        .unwrap()
+        .to_string();
+    let bob_cookie = bob_cookie.split(';').next().unwrap().to_string();
+
+    let res = app
+        .oneshot(json_request(
+            "GET",
+            "/api/admin/users",
+            Value::Null,
+            Some(&bob_cookie),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(res.status(), StatusCode::FORBIDDEN);
+}
+
+#[tokio::test]
+async fn csrf_content_type_guard() {
+    let app = router().await;
+    let _ = setup_and_login(&app).await;
+    let res = app
+        .clone()
+        .oneshot(json_request(
+            "POST",
+            "/api/auth/login",
+            json!({"username": "admin", "password": "hunter2hunter2"}),
+            None,
+        ))
+        .await
+        .unwrap();
+    let cookie = res
+        .headers()
+        .get("set-cookie")
+        .unwrap()
+        .to_str()
+        .unwrap()
+        .to_string();
+    let cookie = cookie.split(';').next().unwrap().to_string();
+
+    // A form-encoded POST with the cookie must be rejected (415).
+    let req = Request::builder()
+        .method("POST")
+        .uri("/api/auth/change-password")
+        .header("content-type", "application/x-www-form-urlencoded")
+        .header("cookie", &cookie)
+        .body(Body::from("current=x&new_password=y"))
+        .unwrap();
+    let res = app.oneshot(req).await.unwrap();
+    assert_eq!(res.status(), StatusCode::UNSUPPORTED_MEDIA_TYPE);
+}
+
+#[tokio::test]
+async fn change_password_revokes_sessions() {
+    let app = router().await;
+    let cookie = setup_and_login(&app).await;
+
+    let res = app
+        .clone()
+        .oneshot(json_request(
+            "POST",
+            "/api/auth/change-password",
+            json!({"current": "hunter2hunter2", "new_password": "new-new-new-new"}),
+            Some(&cookie),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(res.status(), StatusCode::OK);
+
+    // Old session revoked…
+    let res = app
+        .clone()
+        .oneshot(json_request(
+            "GET",
+            "/api/auth/me",
+            Value::Null,
+            Some(&cookie),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(res.status(), StatusCode::UNAUTHORIZED);
+
+    // …and the new password works.
+    let res = app
+        .oneshot(json_request(
+            "POST",
+            "/api/auth/login",
+            json!({"username": "admin", "password": "new-new-new-new"}),
+            None,
+        ))
+        .await
+        .unwrap();
+    assert_eq!(res.status(), StatusCode::OK);
+}
+
+#[tokio::test]
+async fn login_page_renders() {
+    let res = router()
+        .await
+        .oneshot(
+            Request::builder()
+                .uri("/login")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(res.status(), StatusCode::OK);
+    let bytes = res.into_body().collect().await.unwrap().to_bytes();
+    let html = String::from_utf8_lossy(&bytes);
+    assert!(html.contains("Sign in"));
+    assert!(html.contains("tpt_session") || html.contains("doLogin"));
+}

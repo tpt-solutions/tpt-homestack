@@ -1,0 +1,27 @@
+[package]
+name = "tpt-home-api"
+description = "Axum router, middleware and server startup for tpt-homestack"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+
+[dependencies]
+tpt-home-core = { workspace = true }
+tpt-home-ui = { workspace = true }
+axum = { workspace = true }
+tokio = { workspace = true }
+tower-http = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+tracing = { workspace = true }
+tracing-subscriber = { workspace = true }
+anyhow = { workspace = true }
+chrono = { workspace = true }
+tower = { workspace = true }
+
+[dev-dependencies]
+http-body-util = "0.1"
+tempfile = "3"

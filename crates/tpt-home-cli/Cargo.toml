@@ -1,0 +1,31 @@
+[package]
+name = "tpt-home-cli"
+description = "The `tpt-home` single binary: init, migrate, run, scaffold, user and backup management"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+
+[[bin]]
+name = "tpt-home"
+path = "src/main.rs"
+
+[dependencies]
+tpt-home-core = { workspace = true }
+tpt-home-api = { workspace = true }
+tpt-home-bp-notes = { path = "../../blueprints/tpt-home-bp-notes" }
+tpt-home-bp-drop = { path = "../../blueprints/tpt-home-bp-drop" }
+tpt-home-bp-track = { path = "../../blueprints/tpt-home-bp-track" }
+clap = { workspace = true }
+clap_complete = { workspace = true }
+tokio = { workspace = true }
+sqlx = { workspace = true }
+serde_json = { workspace = true }
+anyhow = { workspace = true }
+tracing = { workspace = true }
+uuid = { workspace = true }
+
+[dev-dependencies]
+tempfile = "3"
