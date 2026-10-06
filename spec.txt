@@ -1,0 +1,179 @@
+tpt-homestack Design Specification v2.0
+1. Executive Summary
+tpt-homestack is an ultra-lean, self-hosted, full-stack platform designed specifically for resource-constrained local home servers. It replaces bloated microservices with a highly-optimized, single-binary Rust monolith.
+Version 2.0 of this specification introduces a strict naming convention (tpt-home-*) and a revolutionary "Dead Simple" Blueprint Architecture, allowing developers to create, share, and install custom application modules with near-zero boilerplate.
+Core Philosophy: "One Binary, One File, Zero Bloat, Infinite Extensibility."
+2. Crate Naming Convention
+To maintain a clean, professional, and easily discoverable ecosystem, all internal and community crates within the tpt-homestack workspace will strictly adhere to the following prefix:
+Core Engine: tpt-home-core, tpt-home-api, tpt-home-ui
+Tooling: tpt-home-cli, tpt-home-macros
+Official Blueprints: tpt-home-bp-notes, tpt-home-bp-drop, tpt-home-bp-track
+Community Blueprints: tpt-home-bp-[name] (e.g., tpt-home-bp-calendar)
+3. The "Dead Simple" Blueprint System
+The biggest barrier to entry for self-hosted platforms is the complexity of adding new features. tpt-homestack solves this by treating Blueprints not as separate apps, but as plug-and-play modules powered by procedural macros and CLI scaffolding.
+3.1. The CLI Scaffolding
+Users don't write boilerplate. The tpt-home-cli generates it.
+
+# Creates a new blueprint folder, sets up the Cargo.toml, and registers it in the workspace
+tpt-home new my-custom-app
+
+3.2. The Macro Magic (tpt-home-macros)
+Instead of forcing developers to manually implement a 5-method Blueprint trait, we provide a #[blueprint] procedural macro. This reduces the required code for a new blueprint to just the actual business logic.
+What a developer actually writes to create a new blueprint:
+
+// blueprints/tpt-home-bp-myapp/src/lib.rs
+
+use tpt_home_core::prelude::*;
+use tpt_home_macros::blueprint;
+
+// 1. Define the blueprint with a single macro. 
+// This automatically registers the DB migrations, routes, and UI.
+#[blueprint(id = "myapp", name = "My Custom App")]
+pub struct MyAppBlueprint;
+
+// 2. Define the Database Schema (using SQLx macros)
+#[bp_migration]
+const MIGRATION: &str = r#"
+    CREATE TABLE IF NOT EXISTS myapp_items (
+        id INTEGER PRIMARY KEY,
+        title TEXT NOT NULL,
+        created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+    );
+"#;
+
+// 3. Define the API Routes (using Axum-style macros)
+#[bp_route(get, "/api/myapp/items")]
+async fn list_items(State(db): State<DbPool>) -> impl IntoResponse {
+    let items = sqlx::query_as!("Item", "SELECT * FROM myapp_items")
+        .fetch_all(&db)
+        .await?;
+    Json(items)
+}
+
+// 4. Define the UI (using Leptos)
+#[bp_ui_route("/myapp")]
+fn MyAppView() -> impl IntoView {
+    view! { <h1>"Welcome to My Custom App"</h1> }
+}
+
+Result: The developer writes zero routing boilerplate, zero trait implementations, and zero manual registration code. The macro handles the wiring.
+4. Architecture Overview
+
+[ Internet ] 
+      │
+      ▼
+[ Caddy / Cloudflare Tunnel ] (Handles SSL/HTTPS & Routing)
+      │
+      ▼
+┌───────────────────────────────────────────────────────────────┐
+│                 tpt-homestack (Single Binary)                 │
+│                                                               │
+│  ┌──────────────────── tpt-home-api ────────────────────────┐ │
+│  │  Axum Router + Middleware (Auth, CORS, Rate Limiting)    │ │
+│  │  [ Dynamically injects routes from all active Blueprints ]│ │
+│  └──────────────────────────────────────────────────────────┘ │
+│                                                               │
+│  ┌──────────────────── tpt-home-ui ─────────────────────────┐ │
+│  │  Leptos App Shell (Sidebar, Auth UI, Settings)           │ │
+│  │  [ Dynamically injects UI components from Blueprints ]   │ │
+│  └──────────────────────────────────────────────────────────┘ │
+│                                                               │
+│  ┌──────────────────── tpt-home-core ───────────────────────┐ │
+│  │  SQLx (SQLite), Auth (Argon2/Sessions), Config, File I/O │ │
+│  └──────────────────────────────────────────────────────────┘ │
+│                                                               │
+│  ┌──────────── Active Blueprints (Compiled In) ────────────┐  │
+│  │  tpt-home-bp-notes  │  tpt-home-bp-drop  │  custom-bp  │  │
+│  └─────────────────────────────────────────────────────────┘  │
+└───────────────────────────────────────────────────────────────┘
+                          │
+                          ▼
+              [ data/tpt.db ] (SQLite File)
+              [ data/uploads/ ] (Local Filesystem)
+
+
+5. Core Technology Stack
+Component
+Technology
+Justification
+Language
+Rust
+Memory safety, single binary compilation, zero GC pauses.
+Web Framework
+Axum
+Ergonomic, modular, built on Tokio.
+Database
+SQLite (via SQLx)
+Zero-config, single-file DB. Compile-time checked queries.
+Frontend
+Leptos
+Full-stack Rust framework. SSR + WASM. No Node.js required.
+Macros
+Custom Proc-Macros
+tpt-home-macros eliminates blueprint boilerplate.
+CLI
+Clap
+Powers the tpt-home binary for init, migration, and scaffolding.
+Networking
+Caddy (Sidecar)
+Auto-HTTPS and reverse proxy via Docker Compose.
+6. Directory Structure (Workspace)
+
+tpt-homestack/
+├── Cargo.toml                  # Workspace root
+├── docker-compose.yml          # ONLY runs Caddy and Cloudflared
+├── Caddyfile                   
+├── crates/                     # All internal crates live here
+│   ├── tpt-home-core/          # DB, Auth, Config, shared types
+│   ├── tpt-home-api/           # Axum router, middleware, server startup
+│   ├── tpt-home-ui/            # Leptos shell, shared components
+│   ├── tpt-home-macros/        # Procedural macros (#[blueprint], etc.)
+│   └── tpt-home-cli/           # The `tpt-home` CLI binary
+├── blueprints/                 # All blueprints live here
+│   ├── tpt-home-bp-notes/      # Official: Digital Brain
+│   ├── tpt-home-bp-drop/       # Official: Secure Drop
+│   └── tpt-home-bp-track/      # Official: Simple Tracker
+├── data/                       # Gitignored. Created at runtime.
+│   ├── tpt.db                  
+│   └── uploads/                
+└── scripts/
+    └── install.sh              # Systemd service installer
+
+7. Performance Targets
+Metric
+Target
+Supabase/Node Equivalent
+Idle RAM Usage
+< 30 MB
+~ 1500 MB
+Startup Time
+< 0.5 seconds
+~ 15-30 seconds
+Disk Footprint
+< 25 MB (Binary)
+~ 2000 MB (Docker images)
+CPU Idle
+~ 0.0%
+~ 1-3%
+8. Development Roadmap
+Phase 1: The Core Engine & Macros (Weeks 1-3)
+Initialize Cargo workspace with tpt-home-core, tpt-home-api, tpt-home-ui.
+Set up Axum router, SQLx (SQLite), and basic Auth.
+Crucial: Build tpt-home-macros to prove the #[blueprint] macro works for routing and DB injection.
+Build the Leptos UI Shell (Login, empty dashboard).
+Phase 2: The Official Trinity (Weeks 4-6)
+Implement tpt-home-bp-notes (Markdown, FTS5 search).
+Implement tpt-home-bp-drop (File streaming, background cron cleanup).
+Implement tpt-home-bp-track (Relational data, dynamic tables).
+Phase 3: The CLI & Developer Experience (Weeks 7-8)
+Build tpt-home-cli.
+Implement tpt-home new <name> to scaffold custom blueprints using the macros.
+Implement tpt-home init, tpt-home migrate, tpt-home run.
+Write the install.sh script for systemd integration.
+Phase 4: Polish & Documentation (Week 9)
+Write comprehensive documentation on "How to write your first blueprint in 5 minutes."
+Optimize memory allocations.
+Finalize the single-binary build process (embedding Leptos WASM via cargo-leptos).
+9. Conclusion
+By enforcing the tpt-home-* naming convention and introducing a macro-driven, CLI-scaffolded Blueprint system, tpt-homestack transitions from a simple self-hosted app into a platform.
+It retains the ultra-lean, single-binary performance of Rust, while offering a developer experience that makes creating custom, full-stack modules as easy as writing a few functions. This ensures the project remains maintainable for you as the solo creator, while being infinitely extensible for the community.

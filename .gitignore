@@ -1,0 +1,21 @@
+# Rust
+/target/
+**/*.rs.bk
+
+# Runtime data
+/data/
+
+# Leptos / cargo-leptos
+/pkg/
+/site/
+
+# Environment and secrets
+.env
+.env.*
+!.env.example
+
+# Editors / OS
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
