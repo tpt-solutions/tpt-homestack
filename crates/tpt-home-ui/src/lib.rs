@@ -100,14 +100,10 @@ fn shell_open(title: &str) -> String {
     )
 }
 
-fn sidebar(nav: &[(&str, &str)], active: &str, user: &UserView) -> String {
+fn sidebar(nav: &[(String, String)], active: &str, user: &UserView) -> String {
     let mut links = String::from("<nav>\n<a href=\"/dashboard\">Dashboard</a>\n");
     for (label, path) in nav {
-        let class = if *path == active {
-            " class=\"active\""
-        } else {
-            ""
-        };
+        let class = if path == active { " class=\"active\"" } else { "" };
         links.push_str(&format!("<a href=\"{path}\"{class}>{}</a>\n", esc(label)));
     }
     if user.role == "admin" {
@@ -133,7 +129,7 @@ fn sidebar(nav: &[(&str, &str)], active: &str, user: &UserView) -> String {
 /// Shell page: sidebar + `content` for an authenticated user.
 pub fn page(
     title: &str,
-    nav: &[(&str, &str)],
+    nav: &[(String, String)],
     active: &str,
     user: &UserView,
     content: &str,
@@ -281,6 +277,68 @@ pub fn users_admin_content(users: &[UserRow]) -> String {
     )
 }
 
+/// Declarative plugin page: a read-only table rendered by the host from the
+/// plugin's manifest-scoped database table. `rows` holds one JSON object per
+/// row (plugin data; escaped at render time here).
+pub fn plugin_table_page(
+    title: &str,
+    columns: &[String],
+    rows: &[serde_json::Value],
+    api_base: &str,
+) -> String {
+    let headers: String = columns.iter().map(|c| format!("<th>{}</th>", esc(c))).collect();
+    let mut body = String::new();
+    for row in rows {
+        body.push_str("<tr>");
+        for col in columns {
+            let cell = row.get(col).cloned().unwrap_or(serde_json::Value::Null);
+            let text = match cell {
+                serde_json::Value::String(s) => s,
+                serde_json::Value::Null => String::new(),
+                other => other.to_string(),
+            };
+            body.push_str(&format!("<td>{}</td>", esc(&text)));
+        }
+        body.push_str("</tr>\n");
+    }
+    format!(
+        "<div class=\"card\">\n<table>\n<thead><tr>{headers}</tr></thead>\n<tbody>{body}</tbody>\n</table>\n\
+         <p class=\"muted\">Rows served from the plugin's scoped table. Add data via \
+         <code>POST {api_base}</code>.</p>\n</div>"
+    )
+}
+
+/// Declarative plugin form page: an HTML form that posts JSON to the
+/// plugin's API route (the plugin's wasm handles it).
+pub fn plugin_form_page(title: &str, fields: &[String], action: &str) -> String {
+    let inputs: String = fields
+        .iter()
+        .map(|f| {
+            format!(
+                "<label for=\"pf_{}\">{}</label><input id=\"pf_{}\" name=\"{}\">",
+                esc(f),
+                esc(f),
+                esc(f),
+                esc(f)
+            )
+        })
+        .collect();
+    let field_names: Vec<String> = fields.iter().map(|f| format!("'{f}'")).collect();
+    format!(
+        "<div class=\"card\" style=\"max-width:480px\">\n\
+         <form onsubmit=\"return doSubmit(event)\">\n{inputs}\n\
+         <div style=\"margin-top:14px\"><button type=\"submit\">Submit</button></div>\n</form>\n\
+         <div id=\"pmsg\"></div>\n</div>\n\
+         <script>\nasync function doSubmit(ev) {{\n  ev.preventDefault();\n  const body = {{}};\n  for (const f of [{}]) body[f] = document.getElementById('pf_' + f).value;\n  const r = await fetch('{action}', {{method:'POST', headers:{{'Content-Type':'application/json'}}, body: JSON.stringify(body)}});\n  const j = await r.json().catch(() => ({{}}));\n  const msg = document.getElementById('pmsg');\n  msg.innerHTML = r.ok ? '<div class=\"msg ok\">saved</div>' : '<div class=\"msg error\">' + (j.error || r.statusText) + '</div>';\n  return false;\n}}\n</script>",
+        field_names.join(", ")
+    )
+}
+
+/// Plugin error page fragment.
+pub fn plugin_error_page(message: &str) -> String {
+    format!("<div class=\"msg error\">{}</div>", esc(message))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -305,7 +363,7 @@ mod tests {
         };
         let p = page(
             "Dashboard",
-            &[("Notes", "/notes")],
+            &[("Notes".to_string(), "/notes".to_string())],
             "/notes",
             &user,
             "<p>hi</p>",

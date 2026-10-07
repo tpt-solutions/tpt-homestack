@@ -7,6 +7,9 @@ members = [
     "crates/tpt-home-ui",
     "crates/tpt-home-macros",
     "crates/tpt-home-cli",
+    "crates/tpt-home-plugins",
+    "crates/tpt-home-plugin-sdk",
+    "plugins/tpt-home-bp-calendar",
     "blueprints/tpt-home-bp-notes",
     "blueprints/tpt-home-bp-drop",
     "blueprints/tpt-home-bp-track",
@@ -58,6 +61,11 @@ chrono = { version = "0.4", default-features = false, features = ["std", "clock"
 
 # Registry / registration
 inventory = "0.3"
+
+# Plugin runtime (MIT OR Apache-2.0, no Apache-only deps)
+wasmi = { version = "2.0", default-features = false, features = ["std", "wat"] }
+rusqlite = { version = "0.31", features = ["bundled"] }
+tar = "0.4"
 
 # Errors
 thiserror = "2"

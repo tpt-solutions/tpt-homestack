@@ -128,9 +128,25 @@ pub fn spawn_startup_tasks(db: DbPool) {
     }
 }
 
-/// Sidebar navigation derived from registered UI pages.
-pub fn nav_entries() -> Vec<(&'static str, &'static str)> {
-    inv::iter::<UiEntry>().map(|e| (e.label, e.path)).collect()
+/// Sidebar navigation derived from registered UI pages, plus any extra
+/// entries contributed at runtime (e.g. enabled WASM plugins install a nav
+/// provider at startup).
+pub fn nav_entries() -> Vec<(String, String)> {
+    let mut nav: Vec<(String, String)> = inv::iter::<UiEntry>()
+        .map(|e| (e.label.to_string(), e.path.to_string()))
+        .collect();
+    if let Some(provider) = NAV_PROVIDER.get() {
+        nav.extend(provider());
+    }
+    nav
+}
+
+static NAV_PROVIDER: std::sync::OnceLock<fn() -> Vec<(String, String)>> = std::sync::OnceLock::new();
+
+/// Install a runtime nav provider (one extra sidebar entry per enabled
+/// plugin). Returns `false` if one was already installed.
+pub fn set_nav_provider(provider: fn() -> Vec<(String, String)>) -> bool {
+    NAV_PROVIDER.set(provider).is_ok()
 }
 
 #[cfg(test)]
