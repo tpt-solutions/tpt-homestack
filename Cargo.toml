@@ -81,6 +81,12 @@ quote = "1"
 syn = { version = "2", features = ["full", "extra-traits"] }
 
 [profile.release]
+lto = true
+codegen-units = 1
+strip = true
+opt-level = 3
 
+# The bundled SQLite C build misbehaves at opt-level 0 on Windows debug builds
+# (access violation on the first plugin DB call), so optimize it in dev.
 [profile.dev.package.libsqlite3-sys]
 opt-level = 3
