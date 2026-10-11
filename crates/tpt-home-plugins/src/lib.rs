@@ -27,7 +27,7 @@ inventory::submit! {
         path: "/api/{plugin_id}/{*rest}",
         role: None,
         register: |router| {
-            use axum::routing::{delete, get, patch, post, put};
+            use axum::routing::get;
             router.route(
                 "/api/{plugin_id}/{*rest}",
                 get(dispatch::api_invoke)

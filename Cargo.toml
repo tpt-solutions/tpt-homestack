@@ -63,7 +63,7 @@ chrono = { version = "0.4", default-features = false, features = ["std", "clock"
 inventory = "0.3"
 
 # Plugin runtime (MIT OR Apache-2.0, no Apache-only deps)
-wasmi = { version = "2.0", default-features = false, features = ["std", "wat"] }
+wasmi = { version = "2.0", default-features = false, features = ["std", "wat", "validate"] }
 rusqlite = { version = "0.31", features = ["bundled"] }
 tar = "0.4"
 
@@ -81,7 +81,6 @@ quote = "1"
 syn = { version = "2", features = ["full", "extra-traits"] }
 
 [profile.release]
-lto = true
-codegen-units = 1
-strip = true
+
+[profile.dev.package.libsqlite3-sys]
 opt-level = 3

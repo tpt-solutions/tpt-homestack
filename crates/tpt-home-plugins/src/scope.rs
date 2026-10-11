@@ -161,7 +161,7 @@ pub fn validate_scoped_sql(plugin_id: &str, sql: &str) -> Result<String, ApiErro
     // `(`, etc. cannot inherit a stale table position.
     let prefix = format!("{plugin_id}_");
     let mut table_pos = false;
-    let mut alter_rename = verb == "ALTER";
+    let alter_rename = verb == "ALTER";
     for tok in &toks {
         match tok {
             Tok::Word(w) => {
@@ -199,8 +199,8 @@ pub fn validate_scoped_sql(plugin_id: &str, sql: &str) -> Result<String, ApiErro
 }
 
 fn check_scoped(plugin_id: &str, prefix: &str, ident: &str) -> Result<(), ApiError> {
-    let ok = ident.starts_with(prefix)
-        && ident.len() > prefix.len()
+    let name = ident.strip_prefix(prefix).unwrap_or("");
+    let ok = name.starts_with(|c: char| c.is_ascii_lowercase())
         && ident
             .chars()
             .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '_');
@@ -258,7 +258,7 @@ mod tests {
     #[test]
     fn rejects_smuggling() {
         rejected("SELECT 1; DROP TABLE users");
-        rejected("SELECT 1;");
+        rejected("SELECT 1; SELECT 2;");
         rejected("ATTACH DATABASE 'x' AS y");
         rejected("PRAGMA journal_mode = DELETE");
         rejected("VACUUM");

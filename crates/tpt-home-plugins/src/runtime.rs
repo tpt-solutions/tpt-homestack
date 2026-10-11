@@ -33,7 +33,7 @@
 use std::sync::OnceLock;
 
 use serde::{Deserialize, Serialize};
-use wasmi::{Caller, Engine, Linker, Module, Store};
+use wasmi::{AsContext, Caller, Engine, Linker, Module, Store};
 
 use crate::manifest::PluginManifest;
 use crate::scope;
@@ -165,12 +165,12 @@ pub fn call_plugin(
     }
 
     let alloc = instance.get_typed_func::<u32, u32>(&store, "tpt_alloc")?;
-    let entry = instance.get_typed_func::<i32, i32, i64>(&store, "tpt_entry")?;
+    let entry = instance.get_typed_func::<(i32, i32), i64>(&store, "tpt_entry")?;
 
     let ptr = alloc.call(&mut store, request_json.len() as u32)?;
     memory.write(&mut store, ptr as usize, &request_json)?;
 
-    let packed = entry.call(&mut store, ptr as i32, request_json.len() as i32)?;
+    let packed = entry.call(&mut store, (ptr as i32, request_json.len() as i32))?;
     if packed < 0 {
         anyhow::bail!("plugin returned failure (-1)");
     }
@@ -246,39 +246,42 @@ fn register_imports(linker: &mut Linker<&mut HostCtx>) -> Result<(), wasmi::Erro
             )
             .map_err(|e| wasmi::Error::new(e.to_string()))?;
             let db_path = caller.data().db_path.clone();
-            let conn = caller
-                .data_mut()
-                .state
-                .conn(&db_path)
-                .map_err(err_to_wasmi)?;
+            // Scope the DB borrow so `caller` is free again for `guest_alloc`.
+            let bytes = {
+                let conn = caller
+                    .data_mut()
+                    .state
+                    .conn(&db_path)
+                    .map_err(err_to_wasmi)?;
 
-            let mut stmt = conn.prepare(&sql).map_err(err_to_wasmi)?;
-            let col_names: Vec<String> =
-                stmt.column_names().iter().map(|s| s.to_string()).collect();
-            let mut rows_json: Vec<serde_json::Map<String, serde_json::Value>> = Vec::new();
-            let mut rows = stmt.query([]).map_err(err_to_wasmi)?;
-            while let Some(row) = rows.next().map_err(err_to_wasmi)? {
-                let mut obj = serde_json::Map::new();
-                for (i, name) in col_names.iter().enumerate() {
-                    let value = match row.get_ref(i).map_err(err_to_wasmi)? {
-                        rusqlite::types::ValueRef::Null => serde_json::Value::Null,
-                        rusqlite::types::ValueRef::Integer(v) => v.into(),
-                        rusqlite::types::ValueRef::Real(v) => v.into(),
-                        rusqlite::types::ValueRef::Text(t) => {
-                            serde_json::Value::String(String::from_utf8_lossy(t).into_owned())
-                        }
-                        rusqlite::types::ValueRef::Blob(b) => {
-                            serde_json::Value::String(format!("<blob {} bytes>", b.len()))
-                        }
-                    };
-                    obj.insert(name.clone(), value);
+                let mut stmt = conn.prepare(&sql).map_err(err_to_wasmi)?;
+                let col_names: Vec<String> =
+                    stmt.column_names().iter().map(|s| s.to_string()).collect();
+                let mut rows_json: Vec<serde_json::Map<String, serde_json::Value>> = Vec::new();
+                let mut rows = stmt.query([]).map_err(err_to_wasmi)?;
+                while let Some(row) = rows.next().map_err(err_to_wasmi)? {
+                    let mut obj = serde_json::Map::new();
+                    for (i, name) in col_names.iter().enumerate() {
+                        let value = match row.get_ref(i).map_err(err_to_wasmi)? {
+                            rusqlite::types::ValueRef::Null => serde_json::Value::Null,
+                            rusqlite::types::ValueRef::Integer(v) => v.into(),
+                            rusqlite::types::ValueRef::Real(v) => v.into(),
+                            rusqlite::types::ValueRef::Text(t) => {
+                                serde_json::Value::String(String::from_utf8_lossy(t).into_owned())
+                            }
+                            rusqlite::types::ValueRef::Blob(b) => {
+                                serde_json::Value::String(format!("<blob {} bytes>", b.len()))
+                            }
+                        };
+                        obj.insert(name.clone(), value);
+                    }
+                    rows_json.push(obj);
+                    if rows_json.len() >= MAX_QUERY_ROWS {
+                        break; // result cap per query
+                    }
                 }
-                rows_json.push(obj);
-                if rows_json.len() >= MAX_QUERY_ROWS {
-                    break; // result cap per query
-                }
-            }
-            let bytes = serde_json::to_vec(&rows_json).map_err(err_to_wasmi)?;
+                serde_json::to_vec(&rows_json).map_err(err_to_wasmi)?
+            };
             guest_alloc(caller, &bytes)
         },
     )?;
@@ -387,7 +390,7 @@ fn register_imports(linker: &mut Linker<&mut HostCtx>) -> Result<(), wasmi::Erro
     linker.func_wrap(
         "env",
         "tpt_storage_read",
-        |mut caller: Caller<'_, &mut HostCtx>, ptr: i32, len: i32| -> Result<i64, wasmi::Error> {
+        |caller: Caller<'_, &mut HostCtx>, ptr: i32, len: i32| -> Result<i64, wasmi::Error> {
             if !caller.data().perms.storage {
                 return Ok(-1);
             }
@@ -407,7 +410,7 @@ fn register_imports(linker: &mut Linker<&mut HostCtx>) -> Result<(), wasmi::Erro
     linker.func_wrap(
         "env",
         "tpt_storage_write",
-        |mut caller: Caller<'_, &mut HostCtx>,
+        |caller: Caller<'_, &mut HostCtx>,
          nptr: i32,
          nlen: i32,
          dptr: i32,

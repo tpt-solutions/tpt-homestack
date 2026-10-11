@@ -176,7 +176,7 @@ pub async fn drop_plugin_tables(db: &SqlitePool, plugin_id: &str) -> Result<u32,
 fn load_plugin_dir(dir: &Path, enabled: bool) -> Result<(), anyhow::Error> {
     let manifest = manifest::from_dir(dir)?;
     let wasm = std::fs::read(dir.join(&manifest.plugin.entry))?;
-    let module = Module::new(crate::runtime::engine(), &wasm)
+    let module = Module::new(crate::runtime::engine(), wasm.as_slice())
         .map_err(|e| anyhow::anyhow!("compile {}: {e}", manifest.plugin.entry))?;
     crate::registry::put(
         registry::LoadedPlugin {

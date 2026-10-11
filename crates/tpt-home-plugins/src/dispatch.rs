@@ -10,7 +10,7 @@ use axum::response::{Html, IntoResponse, Response};
 use axum::{Extension, Json};
 use serde::Deserialize;
 use serde_json::json;
-use sqlx::Row;
+use sqlx::{Column, Row};
 
 use tpt_home_core::auth::user::AuthUser;
 use tpt_home_core::prelude::*;
@@ -35,11 +35,11 @@ fn storage_dir(id: &str) -> std::path::PathBuf {
 /// `RouteEntry` (protected); static routes elsewhere in `/api` win over the
 /// parameter, so this only sees plugin traffic.
 pub async fn api_invoke(
-    State(db): State<DbPool>,
+    State(_db): State<DbPool>,
     Path((plugin_id, rest)): Path<(String, String)>,
     method: axum::http::Method,
     Query(query): Query<std::collections::HashMap<String, String>>,
-    body: Option<String>,
+    body: axum::body::Bytes,
 ) -> Result<Response, ApiError> {
     let Some(plugin) = crate::registry::get_enabled(&plugin_id) else {
         return Err(ApiError::not_found(format!("no enabled plugin '{plugin_id}'")));
@@ -54,7 +54,7 @@ pub async fn api_invoke(
         method: method.as_str().to_string(),
         path: format!("/{rest}"),
         query: query_string,
-        body,
+        body: (!body.is_empty()).then(|| String::from_utf8_lossy(&body).into_owned()),
     };
 
     let result = tokio::task::spawn_blocking(move || {
@@ -232,7 +232,7 @@ pub async fn install_plugin(
     let archive = package
         .ok_or_else(|| ApiError::bad_request("multipart field \"package\" is required"))?;
 
-    let (staged, manifest) = lifecycle::stage_package(&archive)
+    let (staged, _manifest) = lifecycle::stage_package(&archive)
         .map_err(|e| ApiError::bad_request(format!("invalid package: {e}")))?;
     let installed = lifecycle::install_from_dir(&db, &staged, enable)
         .await

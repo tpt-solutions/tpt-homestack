@@ -162,6 +162,12 @@ pub fn unpack_verify(
         manifest_text.ok_or_else(|| anyhow::anyhow!("package has no plugin.toml"))?;
     let manifest = manifest::parse(&manifest_text)?;
 
+    // plugin.toml is covered by the checksum manifest too.
+    match checksums.remove("plugin.toml") {
+        Some(sum) if sum.eq_ignore_ascii_case(&sha256_hex(manifest_text.as_bytes())) => {}
+        _ => anyhow::bail!("checksum mismatch or missing for plugin.toml"),
+    }
+
     // Every payload entry must have a matching checksum entry, and every
     // checksum must belong to a present file.
     for (path, bytes) in &entries {
@@ -239,9 +245,13 @@ db = true
         let tmp = tempfile::tempdir().unwrap();
         let dir = sample_dir(tmp.path());
         let mut pkg = pack(&dir).unwrap();
-        // Flip one byte of the payload (inside the wasm content area).
-        let last = pkg.bytes.len() - 8;
-        pkg.bytes[last] ^= 0xFF;
+        // Flip one byte inside the stored wasm payload (not tar padding).
+        let at = pkg
+            .bytes
+            .windows(MINIMAL_WASM.len())
+            .position(|w| w == MINIMAL_WASM)
+            .expect("payload present in archive");
+        pkg.bytes[at + 4] ^= 0xFF;
         let dest = tmp.path().join("installed");
         assert!(unpack_verify(&pkg.bytes, &dest).is_err());
         assert!(!dest.exists(), "nothing is written on failure");
@@ -250,25 +260,22 @@ db = true
     #[test]
     fn traversal_and_foreign_files_rejected() {
         let tmp = tempfile::tempdir().unwrap();
-        // Hand-craft an archive with a bad path.
-        let mut builder = tar::Builder::new(Vec::new());
-        let mut header = tar::Header::new_gnu();
-        header.set_size(4);
-        header.set_cksum();
-        builder
-            .append_data(&mut header, "../evil.txt", b"evil".as_slice())
-            .unwrap();
-        let bytes = builder.into_inner().unwrap();
+        // `append_data` refuses `..` paths, so write the raw header name.
+        let archive_with_name = |name: &str| {
+            let mut builder = tar::Builder::new(Vec::new());
+            let mut header = tar::Header::new_gnu();
+            header.set_size(4);
+            header.set_mode(0o644);
+            header.as_old_mut().name[..name.len()].copy_from_slice(name.as_bytes());
+            header.set_cksum();
+            builder.append(&header, b"evil".as_slice()).unwrap();
+            builder.into_inner().unwrap()
+        };
+
+        let bytes = archive_with_name("../evil.txt");
         assert!(unpack_verify(&bytes, &tmp.path().join("x")).is_err());
 
-        let mut builder = tar::Builder::new(Vec::new());
-        let mut header = tar::Header::new_gnu();
-        header.set_size(4);
-        header.set_cksum();
-        builder
-            .append_data(&mut header, "scripts/run.sh", b"evil".as_slice())
-            .unwrap();
-        let bytes = builder.into_inner().unwrap();
+        let bytes = archive_with_name("scripts/run.sh");
         assert!(unpack_verify(&bytes, &tmp.path().join("y")).is_err());
     }
 }

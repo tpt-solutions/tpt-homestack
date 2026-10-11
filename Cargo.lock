@@ -2199,6 +2199,11 @@ dependencies = [
 [[package]]
 name = "tpt-home-bp-calendar"
 version = "0.1.0"
+dependencies = [
+ "serde",
+ "serde_json",
+ "tpt-home-plugin-sdk",
+]
 
 [[package]]
 name = "tpt-home-bp-drop"
@@ -2311,6 +2316,10 @@ dependencies = [
 [[package]]
 name = "tpt-home-plugin-sdk"
 version = "0.1.0"
+dependencies = [
+ "serde",
+ "serde_json",
+]
 
 [[package]]
 name = "tpt-home-plugins"

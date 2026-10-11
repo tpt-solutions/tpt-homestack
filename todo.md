@@ -76,19 +76,19 @@ Key decisions
 
 ## Phase 4 — WASM Plugin System (community blueprints)
 - [ ] Add `wasmi` runtime to the host (verify MIT/Apache dual license in cargo-deny)
-- [ ] Define plugin ABI/WIT-style interface (versioned)
-- [ ] Define `plugin.toml` manifest (id, name, version, permissions, routes, pages, tables)
-- [ ] Host functions: DB access (scoped to plugin-prefixed tables), key-value store, HTTP response helpers, logging
-- [ ] Host functions: file access (scoped to a plugin directory) — only if permitted by the manifest
+- [x] Define plugin ABI/WIT-style interface (versioned)
+- [x] Define `plugin.toml` manifest (id, name, version, permissions, routes, pages, tables)
+- [x] Host functions: DB access (scoped to plugin-prefixed tables), key-value store, HTTP response helpers, logging
+- [x] Host functions: file access (scoped to a plugin directory) — only if permitted by the manifest
 - [ ] Permission model: plugins declare capabilities, admin approves on install
 - [ ] Sandbox limits: memory cap, fuel/instruction limit, timeouts
 - [ ] Plugin migrations (declared in the manifest, run by the host)
-- [ ] Plugin API route dispatch (`/api/<plugin-id>/…` to the WASM handler)
+- [x] Plugin API route dispatch (`/api/<plugin-id>/…` to the WASM handler)
 - [ ] Declarative UI: manifest-defined pages, forms, lists, tables, detail views rendered by the shell
 - [ ] Plugin lifecycle: install, enable, disable, update, uninstall (with data retention option)
-- [ ] Plugin package format (`.tptp` archive: wasm + manifest + assets) with checksum
+- [x] Plugin package format (`.tptp` archive: wasm + manifest + assets) with checksum
 - [ ] Optional signature verification
-- [ ] Plugin SDK crate (`tpt-home-plugin-sdk`) with a macro-style authoring experience for Rust plugins
+- [x] Plugin SDK crate (`tpt-home-plugin-sdk`) with a macro-style authoring experience for Rust plugins
 - [ ] Plugin template and example plugin (`tpt-home-bp-calendar`)
 - [ ] Hot load/unload without a server restart
 - [ ] Plugin isolation and failure handling (a crashing plugin must not take down the host)
@@ -157,8 +157,8 @@ Key decisions
 ## Phase 9 — Documentation
 - [x] README (what, why, quickstart, license)
 - [x] "Write your first blueprint in 5 minutes" (README section)
-- [ ] "Write your first plugin" guide
-- [ ] Plugin manifest and host API reference
+- [x] "Write your first plugin" guide
+- [x] Plugin manifest and host API reference
 - [x] Architecture overview (docs/ARCHITECTURE.md)
 - [x] Deployment guide (systemd, Docker/Caddy, Cloudflare Tunnel, Windows) — docs/DEPLOYMENT.md
 - [ ] Admin and user guide

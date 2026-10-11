@@ -1,9 +1,17 @@
 [package]
 name = "tpt-home-bp-calendar"
+description = "Example community plugin: a simple calendar of events"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
 authors.workspace = true
+repository.workspace = true
+publish = false
 
 [lib]
 crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+tpt-home-plugin-sdk = { path = "../../crates/tpt-home-plugin-sdk" }
+serde = { workspace = true }
+serde_json = { workspace = true }
