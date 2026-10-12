@@ -17,6 +17,7 @@ use tpt_home_core::prelude::*;
 use tpt_home_ui as ui;
 
 use crate::lifecycle;
+use crate::registry::Backend;
 use crate::runtime::{self, PluginRequest};
 
 fn db_path() -> std::path::PathBuf {
@@ -60,16 +61,16 @@ pub async fn api_invoke(
     };
 
     let granted = plugin.effective_permissions();
-    let result = tokio::task::spawn_blocking(move || {
-        runtime::call_plugin(
-            &plugin.module,
+    let result = tokio::task::spawn_blocking(move || match &plugin.backend {
+        Backend::Wasm(module) => runtime::call_plugin(
+            module,
             &plugin.manifest,
             &request,
             &plugin.manifest.plugin.id,
             &granted,
             &db_path(),
             &storage_dir(&plugin.manifest.plugin.id),
-        )
+        ),
     })
     .await
     .map_err(|e| ApiError::internal(format!("plugin task failed: {e}")))?

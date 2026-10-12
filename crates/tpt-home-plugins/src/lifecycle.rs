@@ -69,49 +69,114 @@ fn plugin_dir(id: &str) -> PathBuf {
 
 /// Record + load a freshly unpacked package. Creates the manifest-declared
 /// tables and (optionally) enables the plugin immediately.
+///
+/// The module is compiled before anything on disk or in the database is
+/// touched, so a broken package leaves the previous install intact. Any
+/// later failure rolls the package directory and database row back.
 pub async fn install_from_dir(
     db: &SqlitePool,
     staged_dir: &Path,
     enable: bool,
 ) -> Result<PluginManifest, anyhow::Error> {
     let manifest = manifest::from_dir(staged_dir)?;
+    let module = compile_module(staged_dir, &manifest)?;
+    let id = manifest.plugin.id.clone();
     let now = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .map(|d| d.as_secs() as i64)
         .unwrap_or(0);
 
-    let dest = plugin_dir(&manifest.plugin.id);
+    let existing: Option<(String,)> = sqlx::query_as("SELECT id FROM plugins WHERE id = ?1")
+        .bind(&id)
+        .fetch_optional(db)
+        .await?;
+    let is_upgrade = existing.is_some();
+
+    // Keep the previous package aside so a failed upgrade can restore it.
+    let dest = plugin_dir(&id);
+    let backup = plugins_root().join(format!(".{id}.previous"));
+    if backup.exists() {
+        std::fs::remove_dir_all(&backup)?;
+    }
     if dest.exists() {
-        std::fs::remove_dir_all(&dest)?;
+        std::fs::rename(&dest, &backup)?;
     }
     std::fs::rename(staged_dir, &dest)?;
 
-    create_manifest_tables(db, &manifest).await?;
     // Install-time approval: the admin is shown the manifest's request and
     // the grant is recorded here. Runtime enforces the intersection.
     let approved = manifest.permissions.clone();
+    let applied = async {
+        create_manifest_tables(db, &manifest).await?;
+        sqlx::query(
+            "INSERT INTO plugins (id, name, version, enabled, approved_permissions, installed_at)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6)
+             ON CONFLICT(id) DO UPDATE SET
+                name = excluded.name,
+                version = excluded.version,
+                enabled = excluded.enabled,
+                approved_permissions = excluded.approved_permissions,
+                installed_at = excluded.installed_at",
+        )
+        .bind(&manifest.plugin.id)
+        .bind(&manifest.plugin.name)
+        .bind(&manifest.plugin.version)
+        .bind(enable)
+        .bind(approved.to_json())
+        .bind(now)
+        .execute(db)
+        .await?;
+        Ok::<(), anyhow::Error>(())
+    }
+    .await;
 
-    sqlx::query(
-        "INSERT INTO plugins (id, name, version, enabled, approved_permissions, installed_at)
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6)
-         ON CONFLICT(id) DO UPDATE SET
-            name = excluded.name,
-            version = excluded.version,
-            enabled = excluded.enabled,
-            approved_permissions = excluded.approved_permissions,
-            installed_at = excluded.installed_at",
-    )
-    .bind(&manifest.plugin.id)
-    .bind(&manifest.plugin.name)
-    .bind(&manifest.plugin.version)
-    .bind(enable)
-    .bind(manifest.permissions.to_json())
-    .bind(now)
-    .execute(db)
-    .await?;
+    if let Err(e) = applied {
+        rollback_install(db, &id, &dest, &backup, is_upgrade).await;
+        return Err(e);
+    }
 
-    load_plugin_dir(&dest, enable, &approved)?;
+    registry::put(
+        registry::LoadedPlugin {
+            manifest: manifest.clone(),
+            backend: registry::Backend::Wasm(module),
+            dir: dest.clone(),
+            approved,
+        },
+        enable,
+    );
+    if backup.exists() {
+        std::fs::remove_dir_all(&backup)?;
+    }
     Ok(manifest)
+}
+
+/// Undo a failed install: restore the previous package for an upgrade, or
+/// remove the new package and its tables and row for a fresh install.
+async fn rollback_install(db: &SqlitePool, id: &str, dest: &Path, backup: &Path, is_upgrade: bool) {
+    if dest.exists()
+        && let Err(e) = std::fs::remove_dir_all(dest)
+    {
+        tracing::error!(plugin = %id, error = %e, "rollback: could not remove new package");
+    }
+    if is_upgrade {
+        if backup.exists()
+            && let Err(e) = std::fs::rename(backup, dest)
+        {
+            tracing::error!(plugin = %id, error = %e, "rollback: could not restore previous package");
+        }
+        return;
+    }
+    // Fresh install: nothing existed before, so every table and row is ours.
+    if let Err(e) = drop_plugin_tables(db, id).await {
+        tracing::error!(plugin = %id, error = %e, "rollback: could not drop tables");
+    }
+    if let Err(e) = sqlx::query("DELETE FROM plugins WHERE id = ?1")
+        .bind(id)
+        .execute(db)
+        .await
+    {
+        tracing::error!(plugin = %id, error = %e, "rollback: could not delete row");
+    }
 }
 
 /// Create the manifest-declared tables (`<id>_<name>`), idempotently.
@@ -175,16 +240,21 @@ pub async fn drop_plugin_tables(db: &SqlitePool, plugin_id: &str) -> Result<u32,
     Ok(dropped)
 }
 
+/// Compile the wasm entry of a package directory.
+fn compile_module(dir: &Path, manifest: &PluginManifest) -> Result<Module, anyhow::Error> {
+    let wasm = std::fs::read(dir.join(&manifest.plugin.entry))?;
+    Module::new(crate::runtime::engine(), wasm.as_slice())
+        .map_err(|e| anyhow::anyhow!("compile {}: {e}", manifest.plugin.entry))
+}
+
 /// Compile + register a plugin from its installed directory.
 fn load_plugin_dir(dir: &Path, enabled: bool, approved: &Permissions) -> Result<(), anyhow::Error> {
     let manifest = manifest::from_dir(dir)?;
-    let wasm = std::fs::read(dir.join(&manifest.plugin.entry))?;
-    let module = Module::new(crate::runtime::engine(), wasm.as_slice())
-        .map_err(|e| anyhow::anyhow!("compile {}: {e}", manifest.plugin.entry))?;
+    let module = compile_module(dir, &manifest)?;
     crate::registry::put(
         registry::LoadedPlugin {
             manifest,
-            module,
+            backend: registry::Backend::Wasm(module),
             dir: dir.to_path_buf(),
             approved: approved.clone(),
         },

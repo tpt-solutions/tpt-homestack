@@ -82,7 +82,7 @@ Key decisions
 - [x] Host functions: DB access (scoped to plugin-prefixed tables), key-value store, HTTP response helpers, logging
 - [x] Host functions: file access (scoped to a plugin directory) — only if permitted by the manifest
 - [ ] Permission model: plugins declare capabilities, admin approves on install
-- [ ] Sandbox limits: memory cap, fuel/instruction limit, timeouts
+- [x] Sandbox limits: memory cap, fuel/instruction limit, timeouts
 - [ ] Plugin migrations (declared in the manifest, run by the host)
 - [x] Plugin API route dispatch (`/api/<plugin-id>/…` to the WASM handler)
 - [ ] Declarative UI: manifest-defined pages, forms, lists, tables, detail views rendered by the shell
@@ -100,14 +100,14 @@ Four tiers sharing one manifest + capability model: JS scripts (Boa), WASM (Rust
 
 ### A. Foundation (prerequisite for everything below)
 - [x] Link `tpt-home-plugins` into the CLI binary (Cargo dep + `BLUEPRINT_LINK_ANCHORS` entry) — `tpt-home run` serves no plugins today
-- [ ] Runtime abstraction: replace `LoadedPlugin.module: wasmi::Module` with an enum/trait (`Wasm` | `Script` | `External`); dispatch through it
+- [x] Runtime abstraction: replace `LoadedPlugin.module: wasmi::Module` with an enum/trait (`Wasm` | `Script` | `External`); dispatch through it
 - [x] Add `[plugin] runtime = "wasm" | "js" | "external"` to the manifest (default `wasm`, reject unknown values)
-- [ ] Extract shared `HostServices` (db/kv/storage/log + capability checks + size/row caps) from the wasmi closures; wasmi imports become thin wrappers
+- [x] Extract shared `HostServices` (db/kv/storage/log + capability checks + size/row caps) from the wasmi closures; wasmi imports become thin wrappers
 - [x] Enforce the stored `approved_permissions` at runtime (dispatch currently uses `manifest.permissions`)
-- [ ] Normalize denied-capability behavior (today: `-1` for reads, silent no-op for writes, trap on scope errors) before freezing ABI v1
-- [ ] Package format: allow `manifest.plugin.entry` and `src/**` script files (unpack currently only accepts `plugin.wasm`)
-- [ ] Roll back plugin dir + DB row when load fails after install
-- [ ] Wall-clock timeout for plugin calls (fuel does not cover time spent in host functions)
+- [x] Normalize denied-capability behavior (today: `-1` for reads, silent no-op for writes, trap on scope errors) before freezing ABI v1
+- [x] Package format: allow `manifest.plugin.entry` and `src/**` script files (unpack currently only accepts `plugin.wasm`)
+- [x] Roll back plugin dir + DB row when load fails after install
+- [x] Wall-clock timeout for plugin calls (checked at every host call; pure guest loops are bounded by fuel only, see docs/PLUGINS.md)
 
 ### B. JS script runtime (Boa)
 - [ ] Add Boa dependency (pinned); verify license and tree with `cargo deny`

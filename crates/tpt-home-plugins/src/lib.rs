@@ -10,6 +10,7 @@
 //! enable/disable without a restart. See `docs/PLUGINS.md`.
 
 pub mod dispatch;
+pub mod host;
 pub mod lifecycle;
 pub mod manifest;
 pub mod package;

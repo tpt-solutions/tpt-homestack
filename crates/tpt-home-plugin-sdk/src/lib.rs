@@ -108,10 +108,10 @@ mod host {
         pub fn tpt_db_query(ptr: i32, len: i32) -> i64;
         pub fn tpt_db_execute(ptr: i32, len: i32) -> i64;
         pub fn tpt_kv_get(ptr: i32, len: i32) -> i64;
-        pub fn tpt_kv_set(kp: i32, kl: i32, vp: i32, vl: i32);
-        pub fn tpt_kv_del(ptr: i32, len: i32);
+        pub fn tpt_kv_set(kp: i32, kl: i32, vp: i32, vl: i32) -> i32;
+        pub fn tpt_kv_del(ptr: i32, len: i32) -> i32;
         pub fn tpt_storage_read(ptr: i32, len: i32) -> i64;
-        pub fn tpt_storage_write(np: i32, nl: i32, dp: i32, dl: i32);
+        pub fn tpt_storage_write(np: i32, nl: i32, dp: i32, dl: i32) -> i32;
     }
 }
 
@@ -127,12 +127,18 @@ mod host {
     pub unsafe fn tpt_kv_get(_: i32, _: i32) -> i64 {
         -1
     }
-    pub unsafe fn tpt_kv_set(_: i32, _: i32, _: i32, _: i32) {}
-    pub unsafe fn tpt_kv_del(_: i32, _: i32) {}
+    pub unsafe fn tpt_kv_set(_: i32, _: i32, _: i32, _: i32) -> i32 {
+        -1
+    }
+    pub unsafe fn tpt_kv_del(_: i32, _: i32) -> i32 {
+        -1
+    }
     pub unsafe fn tpt_storage_read(_: i32, _: i32) -> i64 {
         -1
     }
-    pub unsafe fn tpt_storage_write(_: i32, _: i32, _: i32, _: i32) {}
+    pub unsafe fn tpt_storage_write(_: i32, _: i32, _: i32, _: i32) -> i32 {
+        -1
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -216,11 +222,11 @@ pub fn kv_get(key: &str) -> Result<Option<String>, String> {
     serde_json::from_slice(&bytes).map_err(|e| format!("bad host response: {e}"))
 }
 
-/// Write a key in the plugin's key/value store. Silently ignored when the
-/// permission is not granted (the host does not trap).
-pub fn kv_set(key: &str, value: &str) {
+/// Write a key in the plugin's key/value store. Errors when the permission
+/// is not granted or the write fails.
+pub fn kv_set(key: &str, value: &str) -> Result<(), String> {
     // SAFETY: as in `log`.
-    unsafe {
+    let status = unsafe {
         host::tpt_kv_set(
             key.as_ptr() as i32,
             key.len() as i32,
@@ -228,12 +234,14 @@ pub fn kv_set(key: &str, value: &str) {
             value.len() as i32,
         )
     };
+    status_result(status, "key/value write denied or failed")
 }
 
 /// Delete a key from the plugin's key/value store.
-pub fn kv_del(key: &str) {
+pub fn kv_del(key: &str) -> Result<(), String> {
     // SAFETY: as in `log`.
-    unsafe { host::tpt_kv_del(key.as_ptr() as i32, key.len() as i32) };
+    let status = unsafe { host::tpt_kv_del(key.as_ptr() as i32, key.len() as i32) };
+    status_result(status, "key/value delete denied or failed")
 }
 
 /// Read a UTF-8 file from the plugin's storage directory. `Ok(None)` when the
@@ -250,9 +258,9 @@ pub fn storage_read(name: &str) -> Result<Option<String>, String> {
 }
 
 /// Write a UTF-8 file into the plugin's storage directory.
-pub fn storage_write(name: &str, data: &str) {
+pub fn storage_write(name: &str, data: &str) -> Result<(), String> {
     // SAFETY: as in `log`.
-    unsafe {
+    let status = unsafe {
         host::tpt_storage_write(
             name.as_ptr() as i32,
             name.len() as i32,
@@ -260,6 +268,16 @@ pub fn storage_write(name: &str, data: &str) {
             data.len() as i32,
         )
     };
+    status_result(status, "storage write denied or failed")
+}
+
+/// Map a write import's status (`0` ok, `-1` failed) onto a `Result`.
+fn status_result(status: i32, message: &str) -> Result<(), String> {
+    if status == 0 {
+        Ok(())
+    } else {
+        Err(message.into())
+    }
 }
 
 /// Export the ABI entry points for a handler `fn(Request) -> Response`.

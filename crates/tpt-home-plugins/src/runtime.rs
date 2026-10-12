@@ -13,30 +13,40 @@
 //! returns `(ret_ptr << 32) | ret_len` pointing at the response JSON
 //! (`{"status":200,"content_type":"…","body":"…"}`), or `-1` on failure.
 //!
-//! Guest imports (module `env`), all returning `-1` on error:
+//! Guest imports (module `env`). Every capability-gated import returns `-1`
+//! when the capability is not granted or the operation fails; the host logs
+//! the reason. Only a passed deadline or exhausted fuel traps the guest.
 //!
-//! | import | capability |
-//! |---|---|
-//! | `tpt_log(ptr, len)` | always |
-//! | `tpt_db_query(ptr, len) -> i64` | `db` |
-//! | `tpt_db_execute(ptr, len) -> i64` | `db` |
-//! | `tpt_kv_get(ptr, len) -> i64` | `kv` |
-//! | `tpt_kv_set(kp, kl, vp, vl)` | `kv` |
-//! | `tpt_kv_del(ptr, len)` | `kv` |
-//! | `tpt_storage_read(ptr, len) -> i64` | `storage` |
-//! | `tpt_storage_write(p1, l1, p2, l2)` | `storage` |
+//! | import | capability | returns |
+//! |---|---|---|
+//! | `tpt_log(ptr, len)` | always | nothing |
+//! | `tpt_db_query(ptr, len) -> i64` | `db` | packed JSON rows, or `-1` |
+//! | `tpt_db_execute(ptr, len) -> i64` | `db` | packed JSON `{rows_affected}`, or `-1` |
+//! | `tpt_kv_get(ptr, len) -> i64` | `kv` | packed JSON value (`null` if absent), or `-1` |
+//! | `tpt_kv_set(kp, kl, vp, vl) -> i32` | `kv` | `0` on success, `-1` otherwise |
+//! | `tpt_kv_del(ptr, len) -> i32` | `kv` | `0` on success, `-1` otherwise |
+//! | `tpt_storage_read(ptr, len) -> i64` | `storage` | packed bytes, or `-1` if absent |
+//! | `tpt_storage_write(p1, l1, p2, l2) -> i32` | `storage` | `0` on success, `-1` otherwise |
 //!
 //! String-returning imports allocate the result buffer with the guest's own
 //! `tpt_alloc` and return the packed pointer, so the guest keeps ownership
 //! of its heap.
+//!
+//! # Limits
+//!
+//! `max_fuel` bounds guest instructions. `max_millis` is a wall-clock budget
+//! for the whole invocation, checked at every host call; wasmi offers no
+//! preemptive interrupt, so a guest that loops without calling the host is
+//! bounded by fuel alone.
 
 use std::sync::OnceLock;
+use std::time::{Duration, Instant};
 
 use serde::{Deserialize, Serialize};
 use wasmi::{AsContext, Caller, Engine, Linker, Module, Store};
 
+use crate::host::{HostError, HostResult, HostServices, MAX_STRING_RESULT};
 use crate::manifest::PluginManifest;
-use crate::scope;
 
 /// The plugin's request, built by the dispatcher.
 #[derive(Debug, Serialize)]
@@ -64,55 +74,13 @@ fn default_content_type() -> String {
     "text/plain".to_string()
 }
 
-/// Capability context + services handed to host functions.
+/// Per-invocation host state, reachable from every import through the
+/// store's data.
 pub struct HostCtx {
-    pub plugin_id: String,
-    pub perms: crate::manifest::Permissions,
-    /// Path to the shared SQLite file (the host opens its own sync handle).
-    pub db_path: std::path::PathBuf,
-    /// Plugin-scoped storage directory.
-    pub storage_dir: std::path::PathBuf,
-    /// Captured `tpt_log` lines (bounded).
-    pub logs: Vec<String>,
-    /// Service state that must survive across host calls within one
-    /// invocation.
-    pub state: HostState,
-}
-
-pub struct HostState {
-    /// Memory/table growth limits for wasmi (installed via `Store::limiter`).
+    pub services: HostServices,
+    /// Memory growth limits for wasmi (installed via `Store::limiter`).
     pub limits: wasmi::StoreLimits,
-    /// Lazily-created SQLite connection (opened on first host DB call).
-    conn: Option<rusqlite::Connection>,
 }
-
-impl HostState {
-    fn new(max_memory_bytes: usize) -> Self {
-        Self {
-            limits: wasmi::StoreLimitsBuilder::new()
-                .memory_size(max_memory_bytes)
-                .trap_on_grow_failure(true)
-                .build(),
-            conn: None,
-        }
-    }
-
-    fn conn(
-        &mut self,
-        db_path: &std::path::Path,
-    ) -> Result<&mut rusqlite::Connection, rusqlite::Error> {
-        if self.conn.is_none() {
-            let conn = rusqlite::Connection::open(db_path)?;
-            conn.busy_timeout(std::time::Duration::from_secs(5))?;
-            self.conn = Some(conn);
-        }
-        Ok(self.conn.as_mut().expect("just set"))
-    }
-}
-
-const MAX_LOG_LINES: usize = 100;
-const MAX_STRING_RESULT: u32 = 4 * 1024 * 1024;
-const MAX_QUERY_ROWS: usize = 1_000;
 
 /// The shared plugin engine (fuel metering enabled).
 pub fn engine() -> &'static Engine {
@@ -126,8 +94,8 @@ pub fn engine() -> &'static Engine {
 
 /// Call a plugin's `tpt_entry` with `request`, enforcing the manifest's
 /// permissions and limits. Every failure mode is a `Result`, never a panic
-/// or a hang: fuel exhaustion, traps, bad ABIs and protocol violations all
-/// surface as errors.
+/// or a hang: fuel exhaustion, the deadline, traps, bad ABIs and protocol
+/// violations all surface as errors.
 pub fn call_plugin(
     module: &Module,
     manifest: &PluginManifest,
@@ -138,17 +106,17 @@ pub fn call_plugin(
     storage_dir: &std::path::Path,
 ) -> Result<PluginResponse, anyhow::Error> {
     let max_memory_bytes = (manifest.limits.max_memory_mb as usize) * 1024 * 1024;
+    let deadline = Instant::now() + Duration::from_millis(manifest.limits.max_millis);
     let mut ctx = HostCtx {
-        plugin_id: plugin_id.to_string(),
-        perms: perms.clone(),
-        db_path: db_path.to_path_buf(),
-        storage_dir: storage_dir.to_path_buf(),
-        logs: Vec::new(),
-        state: HostState::new(max_memory_bytes),
+        services: HostServices::new(plugin_id, perms, db_path, storage_dir, deadline),
+        limits: wasmi::StoreLimitsBuilder::new()
+            .memory_size(max_memory_bytes)
+            .trap_on_grow_failure(true)
+            .build(),
     };
 
     let mut store = Store::new(engine(), &mut ctx);
-    store.limiter(|ctx| &mut ctx.state.limits);
+    store.limiter(|ctx| &mut ctx.limits);
     store.set_fuel(manifest.limits.max_fuel)?;
 
     let mut linker: Linker<&mut HostCtx> = Linker::new(engine());
@@ -223,16 +191,32 @@ fn guest_alloc(mut caller: Caller<'_, &mut HostCtx>, bytes: &[u8]) -> Result<i64
     Ok((((ptr as u64) << 32) | bytes.len() as u64) as i64)
 }
 
+/// Map a host-service result onto the guest ABI. A failure becomes `None`
+/// (the guest sees `-1`); a passed deadline traps the invocation.
+fn gate<T>(result: HostResult<T>) -> Result<Option<T>, wasmi::Error> {
+    match result {
+        Ok(value) => Ok(Some(value)),
+        Err(HostError::Failed(reason)) => {
+            tracing::debug!(target: "plugin", %reason, "host call failed");
+            Ok(None)
+        }
+        Err(HostError::Deadline) => Err(wasmi::Error::new("plugin call deadline exceeded")),
+    }
+}
+
+/// Status for write imports: `0` on success, `-1` on failure.
+fn status(result: HostResult<()>) -> Result<i32, wasmi::Error> {
+    Ok(if gate(result)?.is_some() { 0 } else { -1 })
+}
+
 fn register_imports(linker: &mut Linker<&mut HostCtx>) -> Result<(), wasmi::Error> {
     linker.func_wrap(
         "env",
         "tpt_log",
-        |mut caller: Caller<'_, &mut HostCtx>, ptr: i32, len: i32| {
+        |mut caller: Caller<'_, &mut HostCtx>, ptr: i32, len: i32| -> Result<(), wasmi::Error> {
             let msg = guest_str(&caller, ptr as u32, len as u32).unwrap_or_default();
-            if caller.data().logs.len() < MAX_LOG_LINES {
-                caller.data_mut().logs.push(msg.clone());
-            }
-            tracing::debug!(target: "plugin", "{msg}");
+            gate(caller.data_mut().services.log(msg))?;
+            Ok(())
         },
     )?;
 
@@ -240,52 +224,11 @@ fn register_imports(linker: &mut Linker<&mut HostCtx>) -> Result<(), wasmi::Erro
         "env",
         "tpt_db_query",
         |mut caller: Caller<'_, &mut HostCtx>, ptr: i32, len: i32| -> Result<i64, wasmi::Error> {
-            if !caller.data().perms.db {
+            let sql = guest_str(&caller, ptr as u32, len as u32)?;
+            let Some(rows) = gate(caller.data_mut().services.db_query(&sql))? else {
                 return Ok(-1);
-            }
-            let plugin_id = caller.data().plugin_id.clone();
-            let sql = scope::validate_scoped_sql(
-                &plugin_id,
-                &guest_str(&caller, ptr as u32, len as u32)?,
-            )
-            .map_err(|e| wasmi::Error::new(e.to_string()))?;
-            let db_path = caller.data().db_path.clone();
-            // Scope the DB borrow so `caller` is free again for `guest_alloc`.
-            let bytes = {
-                let conn = caller
-                    .data_mut()
-                    .state
-                    .conn(&db_path)
-                    .map_err(err_to_wasmi)?;
-
-                let mut stmt = conn.prepare(&sql).map_err(err_to_wasmi)?;
-                let col_names: Vec<String> =
-                    stmt.column_names().iter().map(|s| s.to_string()).collect();
-                let mut rows_json: Vec<serde_json::Map<String, serde_json::Value>> = Vec::new();
-                let mut rows = stmt.query([]).map_err(err_to_wasmi)?;
-                while let Some(row) = rows.next().map_err(err_to_wasmi)? {
-                    let mut obj = serde_json::Map::new();
-                    for (i, name) in col_names.iter().enumerate() {
-                        let value = match row.get_ref(i).map_err(err_to_wasmi)? {
-                            rusqlite::types::ValueRef::Null => serde_json::Value::Null,
-                            rusqlite::types::ValueRef::Integer(v) => v.into(),
-                            rusqlite::types::ValueRef::Real(v) => v.into(),
-                            rusqlite::types::ValueRef::Text(t) => {
-                                serde_json::Value::String(String::from_utf8_lossy(t).into_owned())
-                            }
-                            rusqlite::types::ValueRef::Blob(b) => {
-                                serde_json::Value::String(format!("<blob {} bytes>", b.len()))
-                            }
-                        };
-                        obj.insert(name.clone(), value);
-                    }
-                    rows_json.push(obj);
-                    if rows_json.len() >= MAX_QUERY_ROWS {
-                        break; // result cap per query
-                    }
-                }
-                serde_json::to_vec(&rows_json).map_err(err_to_wasmi)?
             };
+            let bytes = serde_json::to_vec(&rows).map_err(err_to_wasmi)?;
             guest_alloc(caller, &bytes)
         },
     )?;
@@ -294,22 +237,10 @@ fn register_imports(linker: &mut Linker<&mut HostCtx>) -> Result<(), wasmi::Erro
         "env",
         "tpt_db_execute",
         |mut caller: Caller<'_, &mut HostCtx>, ptr: i32, len: i32| -> Result<i64, wasmi::Error> {
-            if !caller.data().perms.db {
+            let sql = guest_str(&caller, ptr as u32, len as u32)?;
+            let Some(affected) = gate(caller.data_mut().services.db_execute(&sql))? else {
                 return Ok(-1);
-            }
-            let plugin_id = caller.data().plugin_id.clone();
-            let sql = scope::validate_scoped_sql(
-                &plugin_id,
-                &guest_str(&caller, ptr as u32, len as u32)?,
-            )
-            .map_err(|e| wasmi::Error::new(e.to_string()))?;
-            let db_path = caller.data().db_path.clone();
-            let conn = caller
-                .data_mut()
-                .state
-                .conn(&db_path)
-                .map_err(err_to_wasmi)?;
-            let affected = conn.execute(&sql, []).map_err(err_to_wasmi)?;
+            };
             let bytes = serde_json::to_vec(&serde_json::json!({ "rows_affected": affected }))
                 .map_err(err_to_wasmi)?;
             guest_alloc(caller, &bytes)
@@ -320,29 +251,10 @@ fn register_imports(linker: &mut Linker<&mut HostCtx>) -> Result<(), wasmi::Erro
         "env",
         "tpt_kv_get",
         |mut caller: Caller<'_, &mut HostCtx>, ptr: i32, len: i32| -> Result<i64, wasmi::Error> {
-            if !caller.data().perms.kv {
-                return Ok(-1);
-            }
-            let plugin_id = caller.data().plugin_id.clone();
             let key = guest_str(&caller, ptr as u32, len as u32)?;
-            let db_path = caller.data().db_path.clone();
-            let conn = caller
-                .data_mut()
-                .state
-                .conn(&db_path)
-                .map_err(err_to_wasmi)?;
-            let value: Option<String> = conn
-                .query_row(
-                    "SELECT value FROM plugin_kv WHERE plugin_id = ?1 AND key = ?2",
-                    [&plugin_id, &key],
-                    |r| r.get(0),
-                )
-                .map(Some)
-                .or_else(|e| match e {
-                    rusqlite::Error::QueryReturnedNoRows => Ok(None),
-                    other => Err(other),
-                })
-                .map_err(err_to_wasmi)?;
+            let Some(value) = gate(caller.data_mut().services.kv_get(&key))? else {
+                return Ok(-1);
+            };
             let bytes = serde_json::to_vec(&value).map_err(err_to_wasmi)?;
             guest_alloc(caller, &bytes)
         },
@@ -356,91 +268,46 @@ fn register_imports(linker: &mut Linker<&mut HostCtx>) -> Result<(), wasmi::Erro
          klen: i32,
          vptr: i32,
          vlen: i32|
-         -> Result<(), wasmi::Error> {
-            if !caller.data().perms.kv {
-                return Ok(());
-            }
-            let plugin_id = caller.data().plugin_id.clone();
+         -> Result<i32, wasmi::Error> {
             let key = guest_str(&caller, kptr as u32, klen as u32)?;
             let value = guest_str(&caller, vptr as u32, vlen as u32)?;
-            let db_path = caller.data().db_path.clone();
-            let conn = caller
-                .data_mut()
-                .state
-                .conn(&db_path)
-                .map_err(err_to_wasmi)?;
-            conn.execute(
-                "INSERT INTO plugin_kv (plugin_id, key, value) VALUES (?1, ?2, ?3)
-                 ON CONFLICT(plugin_id, key) DO UPDATE SET value = excluded.value",
-                rusqlite::params![plugin_id, key, value],
-            )
-            .map_err(err_to_wasmi)?;
-            Ok(())
+            status(caller.data_mut().services.kv_set(&key, &value))
         },
     )?;
 
     linker.func_wrap(
         "env",
         "tpt_kv_del",
-        |mut caller: Caller<'_, &mut HostCtx>, ptr: i32, len: i32| -> Result<(), wasmi::Error> {
-            if !caller.data().perms.kv {
-                return Ok(());
-            }
-            let plugin_id = caller.data().plugin_id.clone();
+        |mut caller: Caller<'_, &mut HostCtx>, ptr: i32, len: i32| -> Result<i32, wasmi::Error> {
             let key = guest_str(&caller, ptr as u32, len as u32)?;
-            let db_path = caller.data().db_path.clone();
-            let conn = caller
-                .data_mut()
-                .state
-                .conn(&db_path)
-                .map_err(err_to_wasmi)?;
-            conn.execute(
-                "DELETE FROM plugin_kv WHERE plugin_id = ?1 AND key = ?2",
-                rusqlite::params![plugin_id, key],
-            )
-            .map_err(err_to_wasmi)?;
-            Ok(())
+            status(caller.data_mut().services.kv_del(&key))
         },
     )?;
 
     linker.func_wrap(
         "env",
         "tpt_storage_read",
-        |caller: Caller<'_, &mut HostCtx>, ptr: i32, len: i32| -> Result<i64, wasmi::Error> {
-            if !caller.data().perms.storage {
-                return Ok(-1);
-            }
+        |mut caller: Caller<'_, &mut HostCtx>, ptr: i32, len: i32| -> Result<i64, wasmi::Error> {
             let name = guest_str(&caller, ptr as u32, len as u32)?;
-            let dir = caller.data().storage_dir.clone();
-            let path = tpt_home_core::files::safe_join(&dir, &[&name]).map_err(err_to_wasmi)?;
-            // Missing files are -1 (data absent), not a trap.
-            match std::fs::read(&path) {
-                Ok(bytes) if bytes.len() <= MAX_STRING_RESULT as usize => {
-                    guest_alloc(caller, &bytes)
-                }
-                _ => Ok(-1),
-            }
+            let Some(bytes) = gate(caller.data_mut().services.storage_read(&name))? else {
+                return Ok(-1);
+            };
+            guest_alloc(caller, &bytes)
         },
     )?;
 
     linker.func_wrap(
         "env",
         "tpt_storage_write",
-        |caller: Caller<'_, &mut HostCtx>,
+        |mut caller: Caller<'_, &mut HostCtx>,
          nptr: i32,
          nlen: i32,
          dptr: i32,
          dlen: i32|
-         -> Result<(), wasmi::Error> {
-            if !caller.data().perms.storage {
-                return Ok(());
-            }
+         -> Result<i32, wasmi::Error> {
             let name = guest_str(&caller, nptr as u32, nlen as u32)?;
             let data = guest_str(&caller, dptr as u32, dlen as u32)?; // UTF-8 only in v1
-            let dir = caller.data().storage_dir.clone();
-            std::fs::create_dir_all(&dir).map_err(err_to_wasmi)?;
-            let path = tpt_home_core::files::safe_join(&dir, &[&name]).map_err(err_to_wasmi)?;
-            std::fs::write(path, data).map_err(err_to_wasmi)
+            status(caller.data_mut().services.storage_write(&name, &data))
         },
     )?;
 

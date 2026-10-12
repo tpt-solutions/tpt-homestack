@@ -14,11 +14,13 @@ use sha2::{Digest, Sha256};
 
 use crate::manifest;
 
+/// Paths that may appear in a package besides the manifest entry, which is
+/// checked against the parsed manifest: `plugin.toml`, the checksum file,
+/// and files under `assets/` or `src/`.
 fn allowed_path(name: &str) -> bool {
     name == "plugin.toml"
         || name == "checksums.sha256"
-        || name == "plugin.wasm"
-        || (name.starts_with("assets/") && !name.ends_with('/'))
+        || ((name.starts_with("assets/") || name.starts_with("src/")) && !name.ends_with('/'))
 }
 
 fn sha256_hex(bytes: &[u8]) -> String {
@@ -37,7 +39,7 @@ pub struct Package {
 }
 
 /// Build a `.tptp` from a package directory (`plugin.toml` + entry +
-/// optional `assets/`).
+/// optional `assets/` and `src/`).
 pub fn pack(dir: &std::path::Path) -> Result<Package, anyhow::Error> {
     let manifest_text = std::fs::read_to_string(dir.join("plugin.toml"))
         .map_err(|e| anyhow::anyhow!("read plugin.toml: {e}"))?;
@@ -50,9 +52,11 @@ pub fn pack(dir: &std::path::Path) -> Result<Package, anyhow::Error> {
         .map_err(|e| anyhow::anyhow!("read {}: {e}", manifest.plugin.entry))?;
     files.push((manifest.plugin.entry.clone(), entry_bytes));
 
-    let assets = dir.join("assets");
-    if assets.is_dir() {
-        collect_files(&assets, "assets", &mut files)?;
+    for tree in ["assets", "src"] {
+        let root = dir.join(tree);
+        if root.is_dir() {
+            collect_files(&root, tree, &mut files)?;
+        }
     }
 
     // Checksum manifest over everything except itself.
@@ -126,9 +130,6 @@ pub fn unpack_verify(
         {
             anyhow::bail!("illegal path in package: {path}");
         }
-        if !allowed_path(&path) {
-            anyhow::bail!("unexpected file in package: {path}");
-        }
         if entry.size() > 32 * 1024 * 1024 {
             anyhow::bail!("entry {path} too large");
         }
@@ -187,6 +188,11 @@ pub fn unpack_verify(
     if !entries.iter().any(|(p, _)| *p == manifest.plugin.entry) {
         anyhow::bail!("package is missing its entry {}", manifest.plugin.entry);
     }
+    for (path, _) in &entries {
+        if !allowed_path(path) && *path != manifest.plugin.entry {
+            anyhow::bail!("unexpected file in package: {path}");
+        }
+    }
 
     // All checks passed — write the package.
     std::fs::create_dir_all(dest_dir)?;
@@ -240,6 +246,31 @@ db = true
         assert_eq!(manifest.plugin.id, "calendar");
         assert!(dest.join("plugin.wasm").is_file());
         assert!(dest.join("assets/icon.txt").is_file());
+    }
+
+    #[test]
+    fn src_tree_and_custom_entry_roundtrip() {
+        let tmp = tempfile::tempdir().unwrap();
+        let dir = tmp.path().join("notes");
+        std::fs::create_dir_all(dir.join("src/lib")).unwrap();
+        std::fs::write(
+            dir.join("plugin.toml"),
+            "[plugin]
+id = \"notes\"
+name = \"Notes\"
+version = \"0.1.0\"
+entry = \"app.wasm\"
+",
+        )
+        .unwrap();
+        std::fs::write(dir.join("app.wasm"), MINIMAL_WASM).unwrap();
+        std::fs::write(dir.join("src/lib/helper.js"), "export {};").unwrap();
+
+        let pkg = pack(&dir).unwrap();
+        let dest = tmp.path().join("installed");
+        unpack_verify(&pkg.bytes, &dest).unwrap();
+        assert!(dest.join("app.wasm").is_file());
+        assert!(dest.join("src/lib/helper.js").is_file());
     }
 
     #[test]

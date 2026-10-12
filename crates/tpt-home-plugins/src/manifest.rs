@@ -111,6 +111,9 @@ pub struct Limits {
     pub max_fuel: u64,
     /// Linear memory cap in MiB per instance.
     pub max_memory_mb: u64,
+    /// Wall-clock budget per invocation in milliseconds, checked at every
+    /// host call (see `runtime` for why pure guest compute is fuel-bounded).
+    pub max_millis: u64,
 }
 
 impl Default for Limits {
@@ -118,6 +121,7 @@ impl Default for Limits {
         Self {
             max_fuel: 50_000_000,
             max_memory_mb: 16,
+            max_millis: 5_000,
         }
     }
 }
@@ -278,6 +282,9 @@ fn validate(m: &PluginManifest) -> Result<(), anyhow::Error> {
     }
     if m.limits.max_fuel < 1000 {
         anyhow::bail!("limits.max_fuel must be at least 1000");
+    }
+    if !(1..=60_000).contains(&m.limits.max_millis) {
+        anyhow::bail!("limits.max_millis must be 1-60000");
     }
     Ok(())
 }

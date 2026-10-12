@@ -39,9 +39,9 @@ cargo build --release --target wasm32-unknown-unknown
 
 | Section | Purpose |
 |---|---|
-| `[plugin]` | `id` (lowercase, digits, underscore; namespaces routes and tables), `name`, `version`, `entry` (wasm file in the package), `api_version` (must be `1`) |
-| `[permissions]` | `db`, `kv`, `storage` — all default to denied; approved by the admin at install |
-| `[limits]` | `max_fuel` (instruction budget per call), `max_memory_mb` |
+| `[plugin]` | `id` (lowercase, digits, underscore; namespaces routes and tables), `name`, `version`, `entry` (wasm file in the package), `api_version` (must be `1`), `runtime` (`wasm` is the only tier implemented; `js` and `external` are reserved) |
+| `[permissions]` | `db`, `kv`, `storage` — all default to denied. A capability is granted only when the manifest requests it **and** the admin approved it (`plugins.approved_permissions`). |
+| `[limits]` | `max_fuel` (instruction budget per call), `max_memory_mb`, `max_millis` (wall-clock budget per call, default 5000, checked at every host call) |
 | `[[tables]]` | Tables created as `<id>_<name>` at install; column kinds `text`, `integer`, `real`, `bool` |
 | `[[pages]]` | Declarative pages under `/plugins/<id><path>`: `kind = "table"` (rows from a scoped table) or `kind = "form"` (POSTs to the plugin API) |
 
@@ -52,19 +52,34 @@ The example in [`plugins/tpt-home-bp-calendar/plugin.toml`](../plugins/tpt-home-
 | SDK function | Capability | Notes |
 |---|---|---|
 | `db_query(sql)` / `db_execute(sql)` | `db` | One statement. Only tables named `<id>_<name>` are accessible; `ATTACH`, `PRAGMA`, `VACUUM` and similar are rejected. No bound parameters: quote values with `sql_quote`. Results are capped at 1,000 rows. |
-| `kv_get` / `kv_set` / `kv_del` | `kv` | Plugin-scoped key/value store. Writes without the grant are silently ignored. |
+| `kv_get` / `kv_set` / `kv_del` | `kv` | Plugin-scoped key/value store. |
 | `storage_read` / `storage_write` | `storage` | UTF-8 files in the plugin's data directory; names are confined to that directory. |
 | `log` | always | Bounded to 100 lines per call. |
 
-A denied service returns `Err` from the SDK function, so handlers can report
-it instead of trapping.
+Failure contract for every capability-gated import:
+
+- A denied capability, an out-of-scope statement, a missing file or any other
+  ordinary failure returns `-1` to the guest. The SDK turns that into `Err`
+  (reads return `Err`; writes return `Result<(), String>`), so handlers can
+  report it. The host logs the reason at debug level.
+- Only a passed `max_millis` deadline or exhausted `max_fuel` traps the call.
+
+Wall-clock limits are enforced at host-call boundaries. A guest that loops
+without calling the host is bounded by `max_fuel` alone, because the wasm
+engine has no preemptive interrupt.
 
 ## Packages
 
 A `.tptp` package is an uncompressed tar holding `plugin.toml`, the wasm
-entry, optional `assets/`, and `checksums.sha256`. Unpacking verifies every
+entry, optional `assets/` and `src/` trees, and `checksums.sha256`. The entry
+may have any plain file name the manifest declares. Unpacking verifies every
 file's checksum (including `plugin.toml`) and rejects traversal paths and
-unexpected files before anything is written. Upload via
+unexpected files before anything is written.
+
+Installing compiles the wasm entry before touching the disk or database, so a
+broken package leaves any previous install intact. A failure after that point
+restores the previous package (upgrade) or removes the new package, tables and
+row (fresh install). Upload via
 `POST /api/plugins/install` (admin, multipart field `package`).
 
 ## Testing
