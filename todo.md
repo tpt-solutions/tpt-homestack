@@ -86,7 +86,7 @@ Key decisions
 - [ ] Plugin migrations (declared in the manifest, run by the host)
 - [x] Plugin API route dispatch (`/api/<plugin-id>/…` to the WASM handler)
 - [ ] Declarative UI: manifest-defined pages, forms, lists, tables, detail views rendered by the shell
-- [ ] Plugin lifecycle: install, enable, disable, update, uninstall (with data retention option)
+- [ ] Plugin lifecycle: install, enable, disable, update, uninstall (with data retention option) — install, upgrade and uninstall (keep and drop data) are tested; enable/disable exist but have no automated test
 - [x] Plugin package format (`.tptp` archive: wasm + manifest + assets) with checksum
 - [ ] Optional signature verification
 - [x] Plugin SDK crate (`tpt-home-plugin-sdk`) with a macro-style authoring experience for Rust plugins
@@ -106,7 +106,7 @@ Four tiers sharing one manifest + capability model: JS scripts (Boa), WASM (Rust
 - [x] Enforce the stored `approved_permissions` at runtime (dispatch currently uses `manifest.permissions`)
 - [x] Normalize denied-capability behavior (today: `-1` for reads, silent no-op for writes, trap on scope errors) before freezing ABI v1
 - [x] Package format: allow `manifest.plugin.entry` and `src/**` script files (unpack currently only accepts `plugin.wasm`)
-- [x] Roll back plugin dir + DB row when load fails after install
+- [x] Roll back plugin dir + DB row when load fails after install — tested in tests/lifecycle.rs (forced insert failure after the package moved: an upgrade restores the old package, a fresh install leaves nothing)
 - [x] Wall-clock timeout for plugin calls (checked at every host call; pure guest loops are bounded by fuel only, see docs/PLUGINS.md)
 
 ### B. JS script runtime (Boa)
