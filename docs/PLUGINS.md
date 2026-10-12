@@ -47,6 +47,9 @@ cargo build --release --target wasm32-unknown-unknown
 
 The example in [`plugins/tpt-home-bp-calendar/plugin.toml`](../plugins/tpt-home-bp-calendar/plugin.toml) uses every section.
 
+For writing a wasm plugin in a language other than Rust, see the binary
+interface in [`PLUGIN_ABI.md`](PLUGIN_ABI.md).
+
 ## JS script plugins (`runtime = "js"`)
 
 A script plugin is a single JavaScript file (`entry`, for example `main.js`)

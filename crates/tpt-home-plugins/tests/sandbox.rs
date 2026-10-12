@@ -211,3 +211,13 @@ fn host_call_loop_hits_the_wall_clock_deadline() {
     let err = call_with(wat, 1_000_000_000, 1).unwrap_err().to_string();
     assert!(err.contains("deadline"), "{err}");
 }
+
+#[test]
+fn documented_minimal_example_is_a_valid_plugin() {
+    // The file the ABI doc points at. Compiling it here keeps the doc honest.
+    let wat = include_str!("../../../docs/examples/minimal.wat");
+    let response = call(wat, 1_000_000).expect("example must run");
+    assert_eq!(response.status, 200);
+    assert_eq!(response.content_type, "text/plain");
+    assert_eq!(response.body, "hello from wat");
+}

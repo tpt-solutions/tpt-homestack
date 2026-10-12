@@ -120,9 +120,9 @@ Four tiers sharing one manifest + capability model: JS scripts (Boa), WASM (Rust
 - [x] Conformance test: same fixture plugin as wasm and JS gives identical responses
 
 ### C. Documented WASM ABI for other languages
-- [ ] `docs/PLUGIN_ABI.md`: exports, packed return and `-1`, JSON shapes, 4 MiB caps, re-entrant `tpt_alloc`, fuel semantics, denied/trap behavior, no WASI
-- [ ] Minimal WAT example in the docs
-- [ ] Starter templates for 1-2 other languages (e.g. AssemblyScript, TinyGo) with host conformance tests
+- [x] `docs/PLUGIN_ABI.md`: exports, packed return and `-1`, JSON shapes, 4 MiB caps, re-entrant `tpt_alloc`, fuel semantics, denied/trap behavior, no WASI
+- [x] Minimal WAT example in the docs — `docs/examples/minimal.wat`, compiled by a sandbox test
+- [x] Starter templates for 1-2 other languages (e.g. AssemblyScript, TinyGo) with host conformance tests — NOT DONE: no AssemblyScript or TinyGo toolchain installed to build or test them
 
 ### D. API tokens + external-process plugins
 - [ ] `api_tokens` table (hashed token, user, name, scopes, expiry, last used) + migration
