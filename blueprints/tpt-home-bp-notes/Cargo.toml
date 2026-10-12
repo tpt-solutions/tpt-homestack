@@ -1,0 +1,25 @@
+[package]
+name = "tpt-home-bp-notes"
+description = "Official tpt-homestack blueprint: markdown notes with FTS5 full-text search"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+
+[dependencies]
+tpt-home-core = { workspace = true }
+tpt-home-macros = { workspace = true }
+tpt-home-ui = { workspace = true }
+axum = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+sqlx = { workspace = true }
+
+[dev-dependencies]
+tpt-home-api = { workspace = true }
+tower = { workspace = true }
+http-body-util = "0.1"
+tokio = { workspace = true }
+tempfile = "3"

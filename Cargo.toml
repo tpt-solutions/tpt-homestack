@@ -1,0 +1,87 @@
+[workspace]
+resolver = "2"
+members = [
+
+    "crates/tpt-home-core",
+    "crates/tpt-home-api",
+    "crates/tpt-home-ui",
+    "crates/tpt-home-macros",
+    "crates/tpt-home-cli",
+    "crates/tpt-home-plugins",
+    "crates/tpt-home-plugin-sdk",
+    "plugins/tpt-home-bp-calendar",
+    "blueprints/tpt-home-bp-notes",
+    "blueprints/tpt-home-bp-drop",
+    "blueprints/tpt-home-bp-track",
+]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.90"
+license = "MIT OR Apache-2.0"
+authors = ["TPT Solutions"]
+repository = "https://example.com/tpt-homestack"
+homepage = "https://example.com/tpt-homestack"
+
+[workspace.dependencies]
+# Internal crates
+tpt-home-core = { path = "crates/tpt-home-core", version = "0.1.0" }
+tpt-home-macros = { path = "crates/tpt-home-macros", version = "0.1.0" }
+tpt-home-ui = { path = "crates/tpt-home-ui", version = "0.1.0" }
+tpt-home-api = { path = "crates/tpt-home-api", version = "0.1.0" }
+
+# Web stack
+axum = { version = "0.8", features = ["multipart"] }
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "signal", "fs", "time", "io-util", "net"] }
+tower = "0.5"
+tower-http = { version = "0.6", features = ["cors"] }
+tokio-util = { version = "0.7", features = ["codec", "io"] }
+bytes = "1"
+
+# Database
+sqlx = { version = "0.8", default-features = false, features = ["runtime-tokio", "sqlite", "chrono", "macros"] }
+
+# Serde
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+toml = "0.8"
+
+# Observability
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt"] }
+
+# Auth & crypto
+argon2 = { version = "0.5", features = ["std"] }
+sha2 = "0.10"
+uuid = { version = "1", features = ["v4"] }
+
+# Time
+chrono = { version = "0.4", default-features = false, features = ["std", "clock"] }
+
+# Registry / registration
+inventory = "0.3"
+
+# Plugin runtime (MIT OR Apache-2.0, no Apache-only deps)
+wasmi = { version = "2.0", default-features = false, features = ["std", "wat", "validate"] }
+rusqlite = { version = "0.32", features = ["bundled"] }
+tar = "0.4"
+
+# Errors
+thiserror = "2"
+anyhow = "1"
+
+# CLI
+clap = { version = "4", features = ["derive", "env", "wrap_help"] }
+clap_complete = "4"
+
+# Macros crate internals
+proc-macro2 = "1"
+quote = "1"
+syn = { version = "2", features = ["full", "extra-traits"] }
+
+[profile.release]
+lto = true
+codegen-units = 1
+strip = true
+opt-level = 3

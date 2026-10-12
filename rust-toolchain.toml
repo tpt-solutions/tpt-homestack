@@ -1,0 +1,5 @@
+# MSRV policy: the workspace `rust-version` (currently 1.90) is the minimum
+# supported compiler. This file pins `stable` for development; releases must
+# build with any toolchain >= the workspace MSRV.
+[toolchain]
+channel = "stable"

@@ -5,70 +5,71 @@ Owner: TPT Solutions · License: `MIT OR Apache-2.0` · Targets: Linux x86_64, L
 Key decisions
 - Official blueprints (notes, drop, track) are compiled in via `#[blueprint]` macros.
 - Community blueprints are WASM plugins on `wasmi`, with a declarative manifest and host-rendered UI.
+- Plugin authoring tiers (Phase 4b): JS scripts (Boa), WASM with a documented ABI, external processes via API tokens, and an MCP server for AI agents.
 - Multi-user auth with roles.
 - No Apache-only dependencies (wasmtime is excluded).
 
 ---
 
 ## Phase 0 — Foundations & Licensing
-- [ ] Initialize git repository and `.gitignore` (`data/`, `target/`)
-- [ ] Create Cargo workspace root (`Cargo.toml`, resolver 2, shared `[workspace.package]` metadata)
-- [ ] Set workspace license to `MIT OR Apache-2.0`, authors/owner "TPT Solutions"
-- [ ] Add `LICENSE-MIT` (copyright TPT Solutions)
-- [ ] Add `LICENSE-APACHE` (copyright TPT Solutions)
-- [ ] Add license section to README (standard dual-license + contribution wording)
-- [ ] Add SPDX header convention (`// SPDX-License-Identifier: MIT OR Apache-2.0`) to source files
-- [ ] Add `deny.toml` (cargo-deny): allow MIT, BSD, ISC, Unicode, Zlib, and "MIT OR Apache-2.0"-style duals; deny Apache-2.0-only, GPL, AGPL
-- [ ] Audit the initial dependency list against the license policy (Axum, Tokio, SQLx, Leptos, Clap, Argon2, wasmi, etc.)
-- [ ] Document the "no Apache-only dependency" rule in CONTRIBUTING
-- [ ] Set up CI (GitHub Actions): fmt, clippy, test, `cargo deny check`, on Linux and Windows
-- [ ] Add `rust-toolchain.toml` and MSRV policy
-- [ ] Add CONTRIBUTING.md, CODE_OF_CONDUCT.md, SECURITY.md, issue/PR templates
-- [ ] Create empty crate skeletons: `tpt-home-core`, `tpt-home-api`, `tpt-home-ui`, `tpt-home-macros`, `tpt-home-cli`
-- [ ] Create `blueprints/`, `scripts/` directories
+- [x] Initialize git repository and `.gitignore` (`data/`, `target/`)
+- [x] Create Cargo workspace root (`Cargo.toml`, resolver 2, shared `[workspace.package]` metadata)
+- [x] Set workspace license to `MIT OR Apache-2.0`, authors/owner "TPT Solutions"
+- [x] Add `LICENSE-MIT` (copyright TPT Solutions)
+- [x] Add `LICENSE-APACHE` (copyright TPT Solutions)
+- [x] Add license section to README (standard dual-license + contribution wording)
+- [x] Add SPDX header convention (`// SPDX-License-Identifier: MIT OR Apache-2.0`) to source files
+- [x] Add `deny.toml` (cargo-deny): allow MIT, BSD, ISC, Unicode, Zlib, and "MIT OR Apache-2.0"-style duals; deny Apache-2.0-only, GPL, AGPL
+- [x] Audit the initial dependency list against the license policy (Axum, Tokio, SQLx, Clap, Argon2, wasmi, etc. — all dual-licensed; CI `cargo deny` gates the full graph)
+- [x] Document the "no Apache-only dependency" rule in CONTRIBUTING
+- [x] Set up CI (GitHub Actions): fmt, clippy, test, `cargo deny check`, on Linux and Windows
+- [x] Add `rust-toolchain.toml` and MSRV policy
+- [x] Add CONTRIBUTING.md, CODE_OF_CONDUCT.md, SECURITY.md, issue/PR templates
+- [x] Create empty crate skeletons: `tpt-home-core`, `tpt-home-api`, `tpt-home-ui`, `tpt-home-macros`, `tpt-home-cli` (fully implemented, see later phases)
+- [x] Create `blueprints/`, `scripts/` directories
 - [ ] Reserve crate names on crates.io (`tpt-home-*`)
-- [ ] Register the `tpt-home-bp-*` naming convention in docs
+- [x] Register the `tpt-home-bp-*` naming convention in docs (CONTRIBUTING, README)
 
 ## Phase 1 — Core Engine (`tpt-home-core`, `tpt-home-api`)
-- [ ] Config system (file + env + CLI overrides, defaults, validation)
-- [ ] Logging/tracing setup (low overhead)
-- [ ] SQLite pool via SQLx (WAL mode, pragmas tuned for low RAM)
-- [ ] Core migration runner (core + per-blueprint migrations, version tracking)
-- [ ] Shared types and error handling (`prelude`)
-- [ ] File I/O layer for `data/uploads/` (safe paths, no traversal)
-- [ ] Users and roles schema (admin, user; extensible permissions)
-- [ ] Argon2 password hashing
-- [ ] Session management (secure cookies, expiry, revocation)
-- [ ] First-run admin bootstrap flow
-- [ ] Auth endpoints: login, logout, me, change password
-- [ ] User management endpoints (admin only)
-- [ ] Axum router and server startup
-- [ ] Middleware: auth, CORS, rate limiting, request IDs, security headers
-- [ ] Blueprint registry: dynamic route/migration/UI collection from active blueprints
-- [ ] Graceful shutdown and health endpoint
-- [ ] Unit and integration tests for auth, roles, migrations
+- [x] Config system (file + env + CLI overrides, defaults, validation)
+- [x] Logging/tracing setup (low overhead)
+- [x] SQLite pool via SQLx (WAL mode, pragmas tuned for low RAM)
+- [x] Core migration runner (core + per-blueprint migrations, version tracking)
+- [x] Shared types and error handling (`prelude`)
+- [x] File I/O layer for `data/uploads/` (safe paths, no traversal)
+- [x] Users and roles schema (admin, user; extensible via `Role::allows`)
+- [x] Argon2 password hashing
+- [x] Session management (secure cookies, expiry, revocation; SHA-256-hashed tokens)
+- [x] First-run admin bootstrap flow (`tpt-home init` + `/api/setup` + `/setup` page)
+- [x] Auth endpoints: login, logout, me, change password
+- [x] User management endpoints (admin only, with last-admin/self guard rails)
+- [x] Axum router and server startup
+- [x] Middleware: auth, CORS, rate limiting, request IDs, security headers, CSRF content-type check
+- [x] Blueprint registry: dynamic route/migration/UI collection from active blueprints (via `inventory`)
+- [x] Graceful shutdown and health endpoint
+- [x] Unit and integration tests for auth, roles, migrations (53 tests workspace-wide)
 
 ## Phase 2 — Macros (`tpt-home-macros`)
-- [ ] `#[blueprint(id, name)]` macro: registration, metadata, trait implementation
-- [ ] `#[bp_migration]` macro: collect and namespace-check migrations
-- [ ] `#[bp_route(method, path)]` macro: route registration with the `State<DbPool>` extractor
-- [ ] `#[bp_ui_route(path)]` macro: Leptos route and sidebar registration
-- [ ] Auto-registration mechanism (e.g. `inventory`/`linkme`; check licenses)
-- [ ] Error handling with `?` in routes (return-type conversion)
-- [ ] Per-blueprint permission and role attributes
-- [ ] Compile-time checks (id uniqueness, route prefix `/api/<id>/`, table prefix)
+- [x] `#[blueprint(id, name)]` macro: registration, metadata, trait implementation
+- [x] `#[bp_migration]` macro: collect and namespace-check migrations
+- [x] `#[bp_route(method, path)]` macro: route registration with the `State<DbPool>` extractor (plus `role = "..."` and `public` flags)
+- [x] `#[bp_ui_route(path)]` macro: route + sidebar registration (server-rendered v1; Leptos swap-in is Phase 3)
+- [x] Auto-registration mechanism (`inventory`, MIT OR Apache-2.0) with explicit link anchors in the binary
+- [x] Error handling with `?` in routes (`ApiError`: SQLx, I/O, JSON, auth conversions)
+- [x] Per-blueprint permission and role attributes (`role = "admin"`)
+- [x] Compile-time checks (route prefix `/api/` const-assert; id/path validation) — cross-crate id uniqueness is runtime-checked for now
 - [ ] `trybuild` compile-fail tests with readable error messages
-- [ ] Proof-of-concept blueprint exercising routes, DB, and UI end to end
-- [ ] Reconcile the spec example's `query_as!` usage with real SQLx syntax
+- [x] Proof-of-concept blueprint exercising routes, DB, and UI end to end (notes/track/drop e2e tests over the real router)
+- [x] Reconcile the spec example's `query_as!` usage with real SQLx syntax (runtime `query_as` + `FromRow`, documented in README)
 
 ## Phase 3 — UI Shell (`tpt-home-ui`, Leptos)
 - [ ] Set up cargo-leptos (SSR + WASM hydration)
-- [ ] App shell layout: sidebar, header, theming (light/dark)
-- [ ] Login page and auth guard
-- [ ] Empty dashboard
-- [ ] Dynamic sidebar built from active blueprints and plugins
-- [ ] Settings page (profile, password)
-- [ ] Admin pages: users and roles, installed blueprints/plugins
+- [x] App shell layout: sidebar, header, theming (light/dark; server-rendered, no JS framework)
+- [x] Login page and auth guard
+- [x] Empty dashboard (blueprint cards)
+- [x] Dynamic sidebar built from active blueprints (plugins land with Phase 4)
+- [x] Settings page (password change)
+- [x] Admin pages: users and roles (installed-blueprints/plugins page deferred to Phase 4)
 - [ ] Shared components library (forms, tables, lists, modals, toasts)
 - [ ] Accessibility and responsive layout (mobile browsers)
 - [ ] Embed WASM/assets into the single binary
@@ -76,69 +77,121 @@ Key decisions
 
 ## Phase 4 — WASM Plugin System (community blueprints)
 - [ ] Add `wasmi` runtime to the host (verify MIT/Apache dual license in cargo-deny)
-- [ ] Define plugin ABI/WIT-style interface (versioned)
-- [ ] Define `plugin.toml` manifest (id, name, version, permissions, routes, pages, tables)
-- [ ] Host functions: DB access (scoped to plugin-prefixed tables), key-value store, HTTP response helpers, logging
-- [ ] Host functions: file access (scoped to a plugin directory) — only if permitted by the manifest
+- [x] Define plugin ABI/WIT-style interface (versioned)
+- [x] Define `plugin.toml` manifest (id, name, version, permissions, routes, pages, tables)
+- [x] Host functions: DB access (scoped to plugin-prefixed tables), key-value store, HTTP response helpers, logging
+- [x] Host functions: file access (scoped to a plugin directory) — only if permitted by the manifest
 - [ ] Permission model: plugins declare capabilities, admin approves on install
 - [ ] Sandbox limits: memory cap, fuel/instruction limit, timeouts
 - [ ] Plugin migrations (declared in the manifest, run by the host)
-- [ ] Plugin API route dispatch (`/api/<plugin-id>/…` to the WASM handler)
+- [x] Plugin API route dispatch (`/api/<plugin-id>/…` to the WASM handler)
 - [ ] Declarative UI: manifest-defined pages, forms, lists, tables, detail views rendered by the shell
 - [ ] Plugin lifecycle: install, enable, disable, update, uninstall (with data retention option)
-- [ ] Plugin package format (`.tptp` archive: wasm + manifest + assets) with checksum
+- [x] Plugin package format (`.tptp` archive: wasm + manifest + assets) with checksum
 - [ ] Optional signature verification
-- [ ] Plugin SDK crate (`tpt-home-plugin-sdk`) with a macro-style authoring experience for Rust plugins
+- [x] Plugin SDK crate (`tpt-home-plugin-sdk`) with a macro-style authoring experience for Rust plugins
 - [ ] Plugin template and example plugin (`tpt-home-bp-calendar`)
 - [ ] Hot load/unload without a server restart
 - [ ] Plugin isolation and failure handling (a crashing plugin must not take down the host)
 - [ ] Plugin tests and fuzzing of the host boundary
 
+## Phase 4b — Easy Plugin Authoring (JS scripts, any-language WASM, external processes, MCP)
+Four tiers sharing one manifest + capability model: JS scripts (Boa), WASM (Rust SDK + documented ABI), external processes (any language), MCP for AI agents.
+
+### A. Foundation (prerequisite for everything below)
+- [ ] Link `tpt-home-plugins` into the CLI binary (Cargo dep + `BLUEPRINT_LINK_ANCHORS` entry) — `tpt-home run` serves no plugins today
+- [ ] Runtime abstraction: replace `LoadedPlugin.module: wasmi::Module` with an enum/trait (`Wasm` | `Script` | `External`); dispatch through it
+- [ ] Add `[plugin] runtime = "wasm" | "js" | "external"` to the manifest (default `wasm`, reject unknown values)
+- [ ] Extract shared `HostServices` (db/kv/storage/log + capability checks + size/row caps) from the wasmi closures; wasmi imports become thin wrappers
+- [ ] Enforce the stored `approved_permissions` at runtime (dispatch currently uses `manifest.permissions`)
+- [ ] Normalize denied-capability behavior (today: `-1` for reads, silent no-op for writes, trap on scope errors) before freezing ABI v1
+- [ ] Package format: allow `manifest.plugin.entry` and `src/**` script files (unpack currently only accepts `plugin.wasm`)
+- [ ] Roll back plugin dir + DB row when load fails after install
+- [ ] Wall-clock timeout for plugin calls (fuel does not cover time spent in host functions)
+
+### B. JS script runtime (Boa)
+- [ ] Add Boa dependency (pinned); verify license and tree with `cargo deny`
+- [ ] Script contract: `handle(req) -> {status, content_type, body}`; only global is `tpt` (log, db, kv, storage) backed by `HostServices`
+- [ ] Lock down the engine: no `eval`/`Function`, imports, fs, net or timers
+- [ ] Map `[limits]` to the engine: memory cap, instruction budget, wall-clock deadline
+- [ ] Compile once at load and cache; fresh context per request
+- [ ] Ship `tpt.d.ts` typings for editor autocomplete (TypeScript is author-side transpile only)
+- [ ] Script sandbox tests (infinite loop, memory bomb, denied caps, scope violations, forbidden globals)
+- [ ] Conformance test: same fixture plugin as wasm and JS gives identical responses
+
+### C. Documented WASM ABI for other languages
+- [ ] `docs/PLUGIN_ABI.md`: exports, packed return and `-1`, JSON shapes, 4 MiB caps, re-entrant `tpt_alloc`, fuel semantics, denied/trap behavior, no WASI
+- [ ] Minimal WAT example in the docs
+- [ ] Starter templates for 1-2 other languages (e.g. AssemblyScript, TinyGo) with host conformance tests
+
+### D. API tokens + external-process plugins
+- [ ] `api_tokens` table (hashed token, user, name, scopes, expiry, last used) + migration
+- [ ] Bearer-token middleware yielding the same `AuthUser` as the session resolver
+- [ ] `tpt-home token create|list|revoke`
+- [ ] `runtime = "external"`: register by manifest + scoped token; same capabilities and table-prefix rules; host-rendered UI unchanged
+- [ ] Python example external plugin (~30 lines)
+- [ ] Optional (stretch): admin-approved local process supervision from the manifest
+
+### E. MCP server (`tpt-home-mcp`)
+- [ ] Hand-rolled JSON-RPC 2.0 (`initialize`, `tools/list`, `tools/call`); only add an MCP crate if `cargo deny` clears it
+- [ ] Streamable HTTP transport at `POST /api/mcp` (bearer auth, rate limit)
+- [ ] Stdio transport: `tpt-home mcp --token ...`
+- [ ] Add `description` + `schema` to `RouteEntry` (macro args; default description from the doc comment)
+- [ ] Derive tools from enabled blueprint routes and plugin manifests (`[[tables]]`, form actions) + generic `plugin_call`
+- [ ] Execute tool calls through the in-process router with role enforcement (`Role::allows`) and rate limiting; never expose public routes
+- [ ] `docs/AI_PLUGIN_GUIDE.md` so an AI agent can write sandboxed JS plugins
+- [ ] Optional: admin-only `plugin_install` MCP tool with a human approval step
+- [ ] MCP tests: scripted JSON-RPC sessions over stdio and HTTP; non-admin token cannot call admin tools
+
+### F. Housekeeping
+- [ ] Update `docs/PLUGINS.md` for the new runtimes, tokens and MCP
+- [ ] `cargo deny check` for every new dependency
+
 ## Phase 5 — Official Blueprints
 ### `tpt-home-bp-notes`
-- [ ] Schema and migrations (notes, tags)
-- [ ] CRUD API
-- [ ] Markdown rendering (sanitized)
-- [ ] FTS5 full-text search with triggers
-- [ ] Leptos UI: list, editor, preview, search
-- [ ] Tests
+- [x] Schema and migrations (notes, tags)
+- [x] CRUD API
+- [x] Markdown rendering (sanitized, dependency-free subset)
+- [x] FTS5 full-text search with triggers
+- [x] UI: list, editor, preview, search (server-rendered v1; Leptos hydration pending)
+- [x] Tests
 ### `tpt-home-bp-drop`
-- [ ] Schema (drops, expiry, access tokens)
-- [ ] Streaming upload/download (large files, constant memory)
-- [ ] Share links with optional password and expiry
-- [ ] Background cleanup task (cron-style) for expired files
-- [ ] Upload size/quota limits
+- [x] Schema (drops, expiry, access tokens)
+- [x] Streaming upload/download (large files, constant memory; chunk loop + ReaderStream)
+- [x] Share links with optional password and expiry
+- [x] Background cleanup task (cron-style) for expired files (`StartupEntry`)
+- [x] Upload size limits (`max_upload_mb`, enforced while streaming) — per-user quotas deferred
 - [ ] Leptos UI
 - [ ] Tests
 ### `tpt-home-bp-track`
-- [ ] Relational data model with dynamic user-defined tables/fields
-- [ ] Safe dynamic SQL (identifier validation, parameterization)
-- [ ] CRUD API and filters
-- [ ] Leptos UI (table views, forms)
+- [x] Relational data model with dynamic user-defined tables/fields
+- [x] Safe dynamic SQL (integer-only identifiers `track_data_<id>`/`f_<id>`, parameterized values, kind validation)
+- [x] CRUD API and filters
+- [x] UI (table views, forms; server-rendered v1, Leptos hydration pending)
 - [ ] Tests
 
 ## Phase 6 — CLI & Developer Experience (`tpt-home-cli`)
-- [ ] Clap-based `tpt-home` binary
-- [ ] `tpt-home init` (create data dir, config, DB, admin user)
-- [ ] `tpt-home migrate`
-- [ ] `tpt-home run`
-- [ ] `tpt-home new <name>` scaffold (Cargo.toml, lib.rs using macros, workspace registration)
+- [x] Clap-based `tpt-home` binary
+- [x] `tpt-home init` (create data dir, config, DB, admin user)
+- [x] `tpt-home migrate`
+- [x] `tpt-home run`
+- [x] `tpt-home new <name>` scaffold (Cargo.toml, lib.rs using macros, workspace registration; verified compiling)
 - [ ] `tpt-home new --plugin <name>` scaffold for WASM plugins
 - [ ] `tpt-home plugin build|install|list|enable|disable|remove`
-- [ ] `tpt-home user add|list|remove|reset-password`
-- [ ] `tpt-home backup` / `restore` (SQLite + uploads)
-- [ ] Shell completions
-- [ ] `scripts/install.sh` systemd installer (user, unit file, enable/start)
-- [ ] Windows install script/service support
+- [x] `tpt-home user add|list|remove|reset-password`
+- [x] `tpt-home backup` / `restore` (`VACUUM INTO` + uploads copy, atomic swap on restore)
+- [x] Shell completions (bash, zsh, fish, powershell, elvish)
+- [x] `scripts/install.sh` systemd installer (user, hardened unit file, enable/start)
+- [x] Windows install script (`scripts/install.ps1`, logon Scheduled Task; script written, task registration not exercised here)
 - [ ] CLI integration tests
 
 ## Phase 7 — Deployment & Platform Support
-- [ ] `docker-compose.yml` (Caddy + Cloudflared only)
-- [ ] `Caddyfile` with auto-HTTPS and reverse proxy
-- [ ] Cloudflare Tunnel configuration docs
+- [x] `docker-compose.yml` (Caddy + Cloudflared only)
+- [x] `Caddyfile` with auto-HTTPS and reverse proxy
+- [x] Cloudflare Tunnel configuration docs (docs/DEPLOYMENT.md)
 - [ ] Cross-compilation for Linux ARM64
-- [ ] Windows build and run verification
-- [ ] Release profile tuning (LTO, strip, opt-level, panic=abort)
+- [x] Windows build and run verification (release binary smoke-tested: init/run/login/notes/track/drop/share)
+- [x] Release profile tuning (fat LTO, strip, codegen-units=1; panic kept unwinding for tower recovery)
 - [ ] Single-binary build process (embedded WASM/assets)
 - [ ] Upgrade/migration path between versions
 - [ ] Optional Dockerfile for the app itself
@@ -155,14 +208,14 @@ Key decisions
 - [ ] Load and soak testing
 
 ## Phase 9 — Documentation
-- [ ] README (what, why, quickstart, license)
-- [ ] "Write your first blueprint in 5 minutes"
-- [ ] "Write your first plugin" guide
-- [ ] Plugin manifest and host API reference
-- [ ] Architecture overview
-- [ ] Deployment guide (systemd, Docker/Caddy, Cloudflare Tunnel, Windows)
+- [x] README (what, why, quickstart, license)
+- [x] "Write your first blueprint in 5 minutes" (README section)
+- [x] "Write your first plugin" guide
+- [x] Plugin manifest and host API reference
+- [x] Architecture overview (docs/ARCHITECTURE.md)
+- [x] Deployment guide (systemd, Docker/Caddy, Cloudflare Tunnel, Windows) — docs/DEPLOYMENT.md
 - [ ] Admin and user guide
-- [ ] Rustdoc for all public crates
+- [x] Rustdoc for all public crates (doc comments on public items)
 - [ ] Changelog and versioning policy
 
 ## Phase 10 — Release & Community

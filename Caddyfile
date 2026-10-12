@@ -1,0 +1,17 @@
+# tpt-homestack reverse proxy. Caddy terminates TLS automatically.
+# Set TPT_DOMAIN (docker-compose.yml) to your public hostname, e.g.
+#   TPT_DOMAIN=home.example.com docker compose up -d caddy
+
+{$DOMAIN} {
+	encode zstd gzip
+
+	# The single binary listens on the host at 127.0.0.1:8080.
+	reverse_proxy host.docker.internal:8080
+
+	header {
+		Strict-Transport-Security "max-age=31536000; includeSubDomains"
+		X-Content-Type-Options "nosniff"
+		Referrer-Policy "no-referrer"
+		-Server
+	}
+}

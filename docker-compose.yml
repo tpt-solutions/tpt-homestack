@@ -1,0 +1,36 @@
+# tpt-homestack runs as a single binary on the HOST (not in Docker).
+# This compose file only provides the TLS/edge sidecar: Caddy for auto-HTTPS
+# and Cloudflared for Cloudflare Tunnel. Uncomment what you use.
+#
+#   docker compose up -d caddy        # if you have DNS pointing at this box
+#   docker compose up -d cloudflared  # if you use a Cloudflare Tunnel
+
+services:
+  caddy:
+    image: caddy:2-alpine
+    restart: unless-stopped
+    ports:
+      - "80:80"
+      - "443:443"
+    environment:
+      # The public hostname Caddy should get a certificate for.
+      DOMAIN: ${TPT_DOMAIN:-localhost}
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data
+      - caddy_config:/config
+    extra_hosts:
+      # Lets `host.docker.internal` reach the binary on Linux.
+      - "host.docker.internal:host-gateway"
+
+  cloudflared:
+    image: cloudflare/cloudflared:latest
+    restart: unless-stopped
+    command: tunnel run
+    environment:
+      TUNNEL_TOKEN: ${TPT_CLOUDFLARE_TOKEN}
+    # Cloudflared connects out; no inbound ports needed.
+
+volumes:
+  caddy_data:
+  caddy_config:
