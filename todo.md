@@ -86,13 +86,13 @@ Key decisions
 - [x] Plugin migrations (declared in the manifest, run by the host) — forward-only `[[migrations]]`, checksummed, applied in one transaction with the install; tested in tests/lifecycle.rs
 - [x] Plugin API route dispatch (`/api/<plugin-id>/…` to the WASM handler)
 - [x] Declarative UI: manifest-defined pages, forms, lists, tables, detail views rendered by the shell — table (with row links), list, detail (by ?id=) and form pages; escaped output; verified through a session on the ticker example. Not built: search, pagination beyond 200 rows, edit/delete actions in the UI
-- [ ] Plugin lifecycle: install, enable, disable, update, uninstall (with data retention option) — install, upgrade and uninstall (keep and drop data) are tested; enable/disable exist but have no automated test
+- [x] Plugin lifecycle: install, enable, disable, update, uninstall (with data retention option) — all covered by tests/lifecycle.rs; enable and disable take effect without a restart and keep data
 - [x] Plugin package format (`.tptp` archive: wasm + manifest + assets) with checksum
 - [ ] Optional signature verification
 - [x] Plugin SDK crate (`tpt-home-plugin-sdk`) with a macro-style authoring experience for Rust plugins
 - [ ] Plugin template and example plugin (`tpt-home-bp-calendar`)
 - [ ] Hot load/unload without a server restart
-- [ ] Plugin isolation and failure handling (a crashing plugin must not take down the host)
+- [x] Plugin isolation and failure handling (a crashing plugin must not take down the host) — a trapping guest fails only its own call (sandbox test); the next call runs
 - [ ] Plugin tests and fuzzing of the host boundary
 
 ## Phase 4b — Easy Plugin Authoring (JS scripts, any-language WASM, external processes, MCP)

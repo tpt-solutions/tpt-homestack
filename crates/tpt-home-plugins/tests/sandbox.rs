@@ -221,3 +221,26 @@ fn documented_minimal_example_is_a_valid_plugin() {
     assert_eq!(response.content_type, "text/plain");
     assert_eq!(response.body, "hello from wat");
 }
+
+#[test]
+fn a_trapping_guest_fails_its_own_call_and_nothing_else() {
+    // An explicit `unreachable` in the entry point. The host must report an
+    // error for that call without panicking, and a healthy guest must still
+    // run afterwards on the same thread and engine.
+    let trapping = r#"(module
+        (memory (export "memory") 1)
+        (func (export "tpt_alloc") (param i32) (result i32) i32.const 0)
+        (func (export "tpt_entry") (param i32 i32) (result i64) unreachable))"#;
+    assert!(
+        call(trapping, 1_000_000).is_err(),
+        "a trap must be an error"
+    );
+
+    let healthy = r#"(module
+        (memory (export "memory") 1)
+        (data (i32.const 0) "{\"status\":200,\"body\":\"still up\"}")
+        (func (export "tpt_alloc") (param i32) (result i32) i32.const 512)
+        (func (export "tpt_entry") (param i32 i32) (result i64) i64.const 32))"#;
+    let response = call(healthy, 1_000_000).expect("host survives the earlier trap");
+    assert_eq!(response.body, "still up");
+}

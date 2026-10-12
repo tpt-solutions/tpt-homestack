@@ -415,3 +415,40 @@ statements = [
     assert!(applied_versions(&db, id).await.is_empty());
     assert!(registry::get(id).is_none());
 }
+
+#[tokio::test]
+async fn enable_and_disable_toggle_callability_and_keep_data() {
+    let db = fresh_db().await;
+    let id = "toggle";
+    lifecycle::install_from_dir(&db, &stage(id, "0.1.0", &valid_wasm()), false, &grant_all())
+        .await
+        .unwrap();
+    assert!(registry::get(id).is_some(), "loaded");
+    assert!(registry::get_enabled(id).is_none(), "installed disabled");
+    assert!(!lifecycle::is_enabled(&db, id).await.unwrap());
+
+    lifecycle::enable(&db, id).await.unwrap();
+    assert!(
+        registry::get_enabled(id).is_some(),
+        "enabled takes effect without a restart"
+    );
+    assert!(lifecycle::is_enabled(&db, id).await.unwrap());
+
+    sqlx::query("INSERT INTO toggle_items (label) VALUES ('kept')")
+        .execute(&db)
+        .await
+        .unwrap();
+    lifecycle::disable(&db, id).await.unwrap();
+    assert!(
+        registry::get_enabled(id).is_none(),
+        "disabled takes effect at once"
+    );
+    assert!(!lifecycle::is_enabled(&db, id).await.unwrap());
+
+    // Disabling is not uninstalling: the table and its rows remain.
+    let rows: (i64,) = sqlx::query_as("SELECT COUNT(*) FROM toggle_items")
+        .fetch_one(&db)
+        .await
+        .unwrap();
+    assert_eq!(rows.0, 1);
+}
