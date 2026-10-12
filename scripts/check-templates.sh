@@ -15,7 +15,7 @@ trap 'rm -rf "$work"' EXIT
 cd "$work"
 export CARGO_TARGET_DIR="${CARGO_TARGET_DIR:-$root/target}"
 
-templates="basic records logbook file-inbox scheduled-job dashboard scheduled-fetch"
+templates="basic records logbook file-inbox scheduled-job dashboard scheduled-fetch sensor-alerts"
 for kind in $templates; do
   name="check_${kind//-/_}"
   echo "== $kind"

@@ -47,15 +47,14 @@ async function api(url, method, body) {
   if (!r.ok) throw new Error(j.error || r.statusText);
   return j;
 }
-function dayString(day) { return new Date(Number(day) * 86400000).toISOString().slice(0, 10); }
 function timeString(unix) { return new Date(Number(unix) * 1000).toLocaleString(); }
 async function load() {
   try {
     const [snaps, events] = await Promise.all([api('/api/<NAME>/snapshots', 'GET'), api('/api/<NAME>/events', 'GET')]);
     document.getElementById('snapshots').innerHTML = snaps.length === 0
       ? '<p class="muted">No snapshot yet. The first one is taken an hour after the server starts.</p>'
-      : '<table><thead><tr><th>Day (UTC)</th><th>Events, last 7 days</th><th>Taken</th></tr></thead><tbody>' +
-        snaps.map(s => '<tr><td>' + esc(dayString(s.day)) + '</td><td>' + Number(s.events_7d) + '</td><td>' + esc(timeString(s.taken_at)) + '</td></tr>').join('') +
+      : '<table><thead><tr><th>Taken</th><th>Events, last 7 days</th></tr></thead><tbody>' +
+        snaps.map(s => '<tr><td>' + esc(timeString(s.taken_at)) + '</td><td>' + Number(s.events_7d) + '</td></tr>').join('') +
         '</tbody></table>';
     document.getElementById('events').innerHTML = events.length === 0
       ? '<p class="muted">No events yet.</p>'

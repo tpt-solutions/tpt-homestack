@@ -121,6 +121,8 @@ pub enum Template {
     Dashboard,
     /// A job that fetches a URL on a schedule and keeps the responses.
     ScheduledFetch,
+    /// Signed sensor events in, alerts out: quiet-hours openings and silent sensors.
+    SensorAlerts,
 }
 
 /// One file of a template: its path inside the new crate and its source.
@@ -190,6 +192,20 @@ impl Template {
                     include_str!("../templates/dashboard/src/page.rs"),
                 ),
             ],
+            Template::SensorAlerts => &[
+                (
+                    "src/lib.rs",
+                    include_str!("../templates/sensor-alerts/src/lib.rs"),
+                ),
+                (
+                    "src/api.rs",
+                    include_str!("../templates/sensor-alerts/src/api.rs"),
+                ),
+                (
+                    "src/page.rs",
+                    include_str!("../templates/sensor-alerts/src/page.rs"),
+                ),
+            ],
             Template::ScheduledFetch => &[
                 (
                     "src/lib.rs",
@@ -216,6 +232,7 @@ impl Template {
             Template::ScheduledFetch => {
                 "reqwest = { version = \"0.12\", default-features = false, features = [\"rustls-tls\"] }\n"
             }
+            Template::SensorAlerts => "chrono = { workspace = true }\n",
             _ => "",
         }
     }

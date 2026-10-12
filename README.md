@@ -15,6 +15,25 @@ that register their routes, migrations and UI pages with one attribute macro.
 | Disk | < 25 MB (one binary) | ~2000 MB (Docker images) |
 | CPU idle | ~0% | 1–3% |
 
+## Who it's for
+
+tpt-homestack serves small personal apps (notes, file drop, trackers, logs,
+simple automations) to your browser and phone from one lean binary. There are
+two ways to run it:
+
+- **On an existing PC** (Linux or Windows): install the one binary next to
+  whatever else you use the machine for. It doesn't take over the machine, and
+  you can still install anything else, including Docker containers such as
+  Jellyfin, Home Assistant or Ollama.
+- **As a dedicated appliance** (planned): flash an image onto a small or
+  low-end device (Raspberry Pi, mini PC), boot it and open it from another
+  device. No Linux or Windows install needed.
+
+Good fit: low-power or older hardware, one small server for a household, people
+who want one thing to install, back up and update instead of a dozen
+containers. Not a replacement for large, mature apps such as media servers or
+home automation hubs.
+
 ## Quickstart
 
 ```sh
@@ -77,6 +96,7 @@ Starter templates (pick one with `--template`, then edit):
 | `scheduled-job` | A background job that writes a periodic snapshot |
 | `dashboard` | Metric cards built from grouped queries |
 | `scheduled-fetch` | Fetches an admin-set URL on a schedule and keeps the responses |
+| `sensor-alerts` | Signed sensor events in; alerts for an open door during quiet hours and for silent sensors |
 
 What a blueprint looks like — no routing boilerplate, no trait methods, no
 manual registration:
