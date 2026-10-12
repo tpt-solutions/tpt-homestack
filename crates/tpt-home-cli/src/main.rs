@@ -74,6 +74,11 @@ enum Command {
         #[command(subcommand)]
         cmd: UserCmd,
     },
+    /// Manage API tokens for scripts, agents and external plugins.
+    Token {
+        #[command(subcommand)]
+        cmd: TokenCmd,
+    },
     /// Back up the database and uploads to a timestamped folder.
     Backup {
         /// Output directory (default `<data_dir>/backups`).
@@ -95,6 +100,31 @@ enum Command {
         #[command(subcommand)]
         cmd: PluginCmd,
     },
+}
+
+#[derive(Subcommand)]
+enum TokenCmd {
+    /// Create a token. The secret is printed once; store it then.
+    Create {
+        /// Owner of the token (its permissions are the owner's).
+        username: String,
+        /// Label for the token.
+        #[arg(long)]
+        name: String,
+        /// Scope: `api` or `plugin:<id>`. Repeat for several.
+        #[arg(long = "scope", required = true)]
+        scopes: Vec<String>,
+        /// Lifetime in days (default: never expires).
+        #[arg(long)]
+        days: Option<u64>,
+    },
+    /// List tokens, optionally for one user.
+    List {
+        #[arg(long)]
+        username: Option<String>,
+    },
+    /// Revoke a token by id (see `token list`).
+    Revoke { id: i64 },
 }
 
 #[derive(Subcommand)]
@@ -168,6 +198,7 @@ async fn main() -> anyhow::Result<()> {
         }
         Command::New { name } => scaffold::new_blueprint(&name),
         Command::User { cmd } => user_cmd(cli.data_dir, cmd).await,
+        Command::Token { cmd } => token_cmd(cli.data_dir, cmd).await,
         Command::Backup { out_dir } => backup::backup(&load_config(cli.data_dir)?, out_dir).await,
         Command::Restore { backup, yes } => {
             backup::restore(&load_config(cli.data_dir)?, &backup, yes).await
@@ -256,6 +287,65 @@ async fn migrate(data_dir: Option<std::path::PathBuf>) -> anyhow::Result<()> {
     } else {
         for key in applied {
             println!("applied {key}");
+        }
+    }
+    Ok(())
+}
+
+async fn token_cmd(data_dir: Option<std::path::PathBuf>, cmd: TokenCmd) -> anyhow::Result<()> {
+    use tpt_home_core::auth::api_token;
+    let cfg = load_config(data_dir)?;
+    let db = tpt_home_api::init_server(cfg).await?;
+    match cmd {
+        TokenCmd::Create {
+            username,
+            name,
+            scopes,
+            days,
+        } => {
+            let owner = user::get_user_by_name(&db, &username).await?;
+            let ttl = days.map(|d| std::time::Duration::from_secs(d * 86_400));
+            let (id, token) =
+                api_token::create_api_token(&db, owner.id, &name, &scopes, ttl).await?;
+            println!(
+                "created token {id} '{name}' for {} (scopes: {})",
+                owner.username,
+                scopes.join(", ")
+            );
+            println!("secret (shown once, store it now): {token}");
+        }
+        TokenCmd::List { username } => {
+            let owner_id = match username {
+                Some(name) => Some(user::get_user_by_name(&db, &name).await?.id),
+                None => None,
+            };
+            let tokens = api_token::list_api_tokens(&db, owner_id).await?;
+            println!(
+                "{:<4} {:<16} {:<20} {:<24} {:<12} last used",
+                "id", "owner", "name", "scopes", "expires"
+            );
+            for t in tokens {
+                let expires = t.expires_at.map_or("never".to_string(), |e| e.to_string());
+                let last = t
+                    .last_used_at
+                    .map_or("never".to_string(), |e| e.to_string());
+                println!(
+                    "{:<4} {:<16} {:<20} {:<24} {:<12} {}",
+                    t.id,
+                    t.username,
+                    t.name,
+                    t.scopes.join(" "),
+                    expires,
+                    last
+                );
+            }
+        }
+        TokenCmd::Revoke { id } => {
+            if api_token::revoke_api_token(&db, id).await? {
+                println!("revoked token {id}");
+            } else {
+                anyhow::bail!("no token with id {id}");
+            }
         }
     }
     Ok(())

@@ -18,6 +18,7 @@ use axum::middleware::Next;
 use axum::response::{IntoResponse, Response};
 use tracing::Instrument;
 
+use crate::auth::api_token::{resolve_api_token, scope_allows};
 use crate::auth::session::{parse_session_cookie, resolve_session};
 use crate::auth::user::AuthUser;
 use crate::db::DbPool;
@@ -28,26 +29,57 @@ use crate::db::DbPool;
 /// redirect to `/login` for page paths. The login/setup/share endpoints are
 /// mounted outside this layer. Use with
 /// `axum::middleware::from_fn_with_state(db.clone(), auth_resolver)`.
+///
+/// A cookie session wins. Otherwise an `Authorization: Bearer` API token is
+/// accepted, but only on `/api/` paths and only within the token's scopes
+/// (see [`crate::auth::api_token::scope_allows`]); anything else is `403`.
 pub async fn auth_resolver(State(db): State<DbPool>, req: Request, next: Next) -> Response {
-    let user = match parse_session_cookie(req.headers()) {
-        Some(token) => resolve_session(&db, &token).await.unwrap_or(None),
-        None => None,
-    };
-
     let is_api = req.uri().path().starts_with("/api/");
-    match user {
-        Some(user) => {
-            let mut req = req;
-            req.extensions_mut().insert(user);
-            next.run(req).await
-        }
-        None if is_api => (
+
+    if let Some(token) = parse_session_cookie(req.headers())
+        && let Ok(Some(user)) = resolve_session(&db, &token).await
+    {
+        let mut req = req;
+        req.extensions_mut().insert(user);
+        return next.run(req).await;
+    }
+
+    if let Some(token) = parse_bearer(req.headers()) {
+        return match resolve_api_token(&db, &token).await {
+            Ok(Some(resolved)) if is_api && scope_allows(&resolved.scopes, req.uri().path()) => {
+                let mut req = req;
+                req.extensions_mut().insert(resolved.user);
+                next.run(req).await
+            }
+            Ok(Some(_)) => (
+                StatusCode::FORBIDDEN,
+                "{\"error\":\"token scope does not allow this path\"}",
+            )
+                .into_response(),
+            _ => (
+                StatusCode::UNAUTHORIZED,
+                "{\"error\":\"authentication required\"}",
+            )
+                .into_response(),
+        };
+    }
+
+    if is_api {
+        (
             StatusCode::UNAUTHORIZED,
             "{\"error\":\"authentication required\"}",
         )
-            .into_response(),
-        None => axum::response::Redirect::to("/login").into_response(),
+            .into_response()
+    } else {
+        axum::response::Redirect::to("/login").into_response()
     }
+}
+
+/// The bearer token from an `Authorization: Bearer <token>` header, if any.
+fn parse_bearer(headers: &axum::http::HeaderMap) -> Option<String> {
+    let value = headers.get(header::AUTHORIZATION)?.to_str().ok()?;
+    let token = value.strip_prefix("Bearer ")?.trim();
+    (!token.is_empty()).then(|| token.to_string())
 }
 
 /// Require the authenticated user to satisfy a role. Admins satisfy every

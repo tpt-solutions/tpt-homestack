@@ -125,9 +125,9 @@ Four tiers sharing one manifest + capability model: JS scripts (Boa), WASM (Rust
 - [x] Starter templates for 1-2 other languages (e.g. AssemblyScript, TinyGo) with host conformance tests — NOT DONE: no AssemblyScript or TinyGo toolchain installed to build or test them
 
 ### D. API tokens + external-process plugins
-- [ ] `api_tokens` table (hashed token, user, name, scopes, expiry, last used) + migration
-- [ ] Bearer-token middleware yielding the same `AuthUser` as the session resolver
-- [ ] `tpt-home token create|list|revoke`
+- [x] `api_tokens` table (hashed token, user, name, scopes, expiry, last used) + migration — migration `tpt-home-core:004_api_tokens`; hashed, scoped (`api` or `plugin:<id>`), expiring
+- [x] Bearer-token middleware yielding the same `AuthUser` as the session resolver — `auth_resolver` accepts `Authorization: Bearer` on `/api/` only, within scopes (403 out of scope)
+- [x] `tpt-home token create|list|revoke`
 - [ ] `runtime = "external"`: register by manifest + scoped token; same capabilities and table-prefix rules; host-rendered UI unchanged
 - [ ] Python example external plugin (~30 lines)
 - [ ] Optional (stretch): admin-approved local process supervision from the manifest

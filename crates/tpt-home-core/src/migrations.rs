@@ -51,3 +51,22 @@ inventory::submit! {
         "#,
     }
 }
+
+inventory::submit! {
+    MigrationEntry {
+        key: "tpt-home-core:004_api_tokens",
+        sql: r#"
+            CREATE TABLE IF NOT EXISTS api_tokens (
+                id           INTEGER PRIMARY KEY,
+                user_id      INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+                name         TEXT    NOT NULL,
+                token_hash   TEXT    NOT NULL UNIQUE,
+                scopes       TEXT    NOT NULL,
+                created_at   INTEGER NOT NULL,
+                expires_at   INTEGER,
+                last_used_at INTEGER
+            );
+            CREATE INDEX IF NOT EXISTS idx_api_tokens_user ON api_tokens(user_id);
+        "#,
+    }
+}
