@@ -44,7 +44,7 @@ cargo build --release --target wasm32-unknown-unknown
 | `[limits]` | `max_fuel` (instruction budget per call), `max_memory_mb`, `max_millis` (wall-clock budget per call, default 5000, checked at every host call) |
 | `[[tables]]` | Tables created as `<id>_<name>` at install; column kinds `text`, `integer`, `real`, `bool` |
 | `[[migrations]]` | Forward-only schema changes: `version` (positive, strictly increasing) and `statements` (one each, touching only `<id>_*` tables). Each version runs once per plugin, in one transaction with the install. An edited, already-applied migration refuses the upgrade. There are no down migrations: to undo a change, add a new migration. |
-| `[[pages]]` | Declarative pages under `/plugins/<id><path>`: `kind = "table"` (rows from a scoped table) or `kind = "form"` (POSTs to the plugin API) |
+| `[[pages]]` | Declarative pages under `/plugins/<id><path>`. `kind = "table"` (rows from a scoped table; with `link = "/detail"` the first column links to a detail page), `"list"` (one item per row: the first column is the title, the rest a detail line), `"detail"` (one row, selected by `?id=<row id>`), or `"form"` (POSTs JSON to the plugin API at `action`). Column, field and action names must be plain identifiers. |
 
 The example in [`plugins/tpt-home-bp-calendar/plugin.toml`](../plugins/tpt-home-bp-calendar/plugin.toml) uses every section.
 

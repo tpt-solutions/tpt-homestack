@@ -23,3 +23,25 @@ title = "Items"
 kind = "table"
 table = "items"
 columns = ["label"]
+link = "/item"
+
+[[pages]]
+path = "/item"
+title = "Item"
+kind = "detail"
+table = "items"
+columns = ["label"]
+
+[[pages]]
+path = "/list"
+title = "Items (list)"
+kind = "list"
+table = "items"
+columns = ["label"]
+
+[[pages]]
+path = "/new"
+title = "Add an item"
+kind = "form"
+fields = ["label"]
+action = "items"

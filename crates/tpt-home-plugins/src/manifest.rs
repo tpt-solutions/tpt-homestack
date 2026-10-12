@@ -180,6 +180,9 @@ pub struct PageDef {
     /// `form` pages: API path that receives the POST (below `/api/<id>`).
     #[serde(default)]
     pub action: Option<String>,
+    /// `table` pages: a `detail` page path. Rows link to it as `?id=<row>`.
+    #[serde(default)]
+    pub link: Option<String>,
 }
 
 /// A forward-only schema migration (`[[migrations]]`). Applied once per
@@ -289,19 +292,46 @@ fn validate(m: &PluginManifest) -> Result<(), anyhow::Error> {
         if !page.path.starts_with('/') || page.path.contains("..") || page.path.contains('?') {
             anyhow::bail!("page path '{}' must start with '/' and be plain", page.path);
         }
+        for column in page.columns.iter().chain(page.fields.iter()) {
+            valid_component(column, "column or field name")?;
+        }
         match page.kind.as_str() {
-            "table" => {
+            "table" | "list" | "detail" => {
                 let Some(table) = &page.table else {
-                    anyhow::bail!("table page '{}' needs `table`", page.path);
+                    anyhow::bail!("{} page '{}' needs `table`", page.kind, page.path);
                 };
                 valid_component(table, "table name")?;
-            }
-            "form" => {
-                if page.action.is_none() {
-                    anyhow::bail!("form page '{}' needs `action`", page.path);
+                if page.kind == "list" && page.columns.is_empty() {
+                    anyhow::bail!(
+                        "list page '{}' needs `columns` (the first is its title)",
+                        page.path
+                    );
                 }
             }
-            other => anyhow::bail!("page '{}' kind '{other}' must be table|form", page.path),
+            "form" => {
+                let Some(action) = &page.action else {
+                    anyhow::bail!("form page '{}' needs `action`", page.path);
+                };
+                if !action
+                    .chars()
+                    .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '_' || c == '/')
+                    || action.contains("..")
+                {
+                    anyhow::bail!("form action '{action}' must be a plain path");
+                }
+            }
+            other => anyhow::bail!(
+                "page '{}' kind '{other}' must be table|form|list|detail",
+                page.path
+            ),
+        }
+        if let Some(link) = &page.link {
+            if page.kind != "table" {
+                anyhow::bail!("only table pages can link to a detail page");
+            }
+            if !link.starts_with('/') || link.contains("..") || link.contains('?') {
+                anyhow::bail!("link '{link}' must be a plain page path");
+            }
         }
     }
 
@@ -563,6 +593,81 @@ statements = []
             "entry = \"http://127.0.0.1:8790\"",
         );
         assert!(parse(&external_ok).is_ok());
+    }
+
+    #[test]
+    fn page_kinds_and_names_are_validated() {
+        let page = |body: &str| {
+            format!(
+                "{SAMPLE}
+[[pages]]
+{body}
+"
+            )
+        };
+        assert!(
+            parse(&page(
+                "path = \"/list\"
+title = \"L\"
+kind = \"list\"
+table = \"events\"
+columns = [\"title\"]"
+            ))
+            .is_ok()
+        );
+        assert!(
+            parse(&page(
+                "path = \"/list\"
+title = \"L\"
+kind = \"list\"
+table = \"events\""
+            ))
+            .is_err(),
+            "list needs columns"
+        );
+        assert!(
+            parse(&page(
+                "path = \"/d\"
+title = \"D\"
+kind = \"detail\""
+            ))
+            .is_err(),
+            "detail needs table"
+        );
+        assert!(
+            parse(&page(
+                "path = \"/x\"
+title = \"X\"
+kind = \"list\"
+table = \"events\"
+columns = [\"a'); alert(1);//\"]"
+            ))
+            .is_err(),
+            "quotes in names"
+        );
+        assert!(
+            parse(&page(
+                "path = \"/f\"
+title = \"F\"
+kind = \"form\"
+fields = [\"title\"]
+action = \"x'y\""
+            ))
+            .is_err(),
+            "action must be a plain path"
+        );
+        assert!(
+            parse(&page(
+                "path = \"/f\"
+title = \"F\"
+kind = \"form\"
+fields = [\"title\"]
+action = \"add\"
+link = \"/d\""
+            ))
+            .is_err(),
+            "only tables link"
+        );
     }
 
     #[test]

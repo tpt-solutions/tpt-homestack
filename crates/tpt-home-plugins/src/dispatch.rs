@@ -127,6 +127,7 @@ pub async fn page(
     State(db): State<DbPool>,
     Extension(user): Extension<AuthUser>,
     Path((plugin_id, rest)): Path<(String, String)>,
+    Query(params): Query<std::collections::HashMap<String, String>>,
 ) -> Result<Html<String>, ApiError> {
     let Some(plugin) = crate::registry::get_enabled(&plugin_id) else {
         return Err(ApiError::not_found(format!(
@@ -141,32 +142,38 @@ pub async fn page(
     };
 
     let api_base = format!("/api/{plugin_id}");
+    let link = |page: &crate::manifest::PageDef| {
+        page.link
+            .as_deref()
+            .map(|l| lifecycle::plugin_page_path(&plugin_id, l))
+    };
     let content = match page_def.kind.as_str() {
         "table" => {
             let Some(table) = &page_def.table else {
                 return Err(ApiError::bad_request("page has no table"));
             };
-            let scoped = plugin.scoped_table(table);
-            let sql = format!("SELECT * FROM \"{scoped}\" ORDER BY id DESC LIMIT 200");
-            let rows = sqlx::query(&sql).fetch_all(&db).await?;
-            let mut out: Vec<serde_json::Value> = Vec::new();
-            for row in &rows {
-                let mut obj = serde_json::Map::new();
-                for (i, column) in row.columns().iter().enumerate() {
-                    let value: serde_json::Value = if let Ok(v) = row.try_get::<Option<i64>, _>(i) {
-                        v.map(|v| json!(v)).unwrap_or(json!(null))
-                    } else if let Ok(v) = row.try_get::<Option<f64>, _>(i) {
-                        v.map(|v| json!(v)).unwrap_or(json!(null))
-                    } else if let Ok(v) = row.try_get::<Option<String>, _>(i) {
-                        v.map(|v| json!(v)).unwrap_or(json!(null))
-                    } else {
-                        json!(null)
-                    };
-                    obj.insert(column.name().to_string(), value);
-                }
-                out.push(serde_json::Value::Object(obj));
-            }
-            ui::plugin_table_page(&page_def.columns, &out, &api_base)
+            let rows = load_rows(&db, &plugin.scoped_table(table), None).await?;
+            let columns = page_columns(&page_def.columns, rows.first());
+            ui::plugin_table_page(&columns, &rows, &api_base, link(page_def).as_deref())
+        }
+        "list" => {
+            let Some(table) = &page_def.table else {
+                return Err(ApiError::bad_request("page has no table"));
+            };
+            let rows = load_rows(&db, &plugin.scoped_table(table), None).await?;
+            ui::plugin_list_page(&page_def.columns, &rows, link(page_def).as_deref())
+        }
+        "detail" => {
+            let Some(table) = &page_def.table else {
+                return Err(ApiError::bad_request("page has no table"));
+            };
+            let id: i64 = params
+                .get("id")
+                .and_then(|v| v.parse().ok())
+                .ok_or_else(|| ApiError::bad_request("detail pages need an integer ?id="))?;
+            let rows = load_rows(&db, &plugin.scoped_table(table), Some(id)).await?;
+            let columns = page_columns(&page_def.columns, rows.first());
+            ui::plugin_detail_page(&columns, rows.first())
         }
         "form" => ui::plugin_form_page(
             &page_def.fields,
@@ -187,6 +194,60 @@ pub async fn page(
         &view,
         &content,
     )))
+}
+
+/// Columns a page shows: the manifest's list, or every column of the first row
+/// when the manifest names none.
+fn page_columns(declared: &[String], first: Option<&serde_json::Value>) -> Vec<String> {
+    if !declared.is_empty() {
+        return declared.to_vec();
+    }
+    first
+        .and_then(serde_json::Value::as_object)
+        .map(|o| o.keys().cloned().collect())
+        .unwrap_or_default()
+}
+
+/// Read rows from a plugin's scoped table as JSON objects. `Some(id)` selects a
+/// single row; `None` returns the newest 200.
+async fn load_rows(
+    db: &DbPool,
+    scoped_table: &str,
+    id: Option<i64>,
+) -> Result<Vec<serde_json::Value>, ApiError> {
+    let rows = match id {
+        Some(id) => {
+            sqlx::query(&format!("SELECT * FROM \"{scoped_table}\" WHERE id = ?1"))
+                .bind(id)
+                .fetch_all(db)
+                .await?
+        }
+        None => {
+            sqlx::query(&format!(
+                "SELECT * FROM \"{scoped_table}\" ORDER BY id DESC LIMIT 200"
+            ))
+            .fetch_all(db)
+            .await?
+        }
+    };
+    let mut out = Vec::with_capacity(rows.len());
+    for row in &rows {
+        let mut obj = serde_json::Map::new();
+        for (i, column) in row.columns().iter().enumerate() {
+            let value: serde_json::Value = if let Ok(v) = row.try_get::<Option<i64>, _>(i) {
+                v.map(|v| json!(v)).unwrap_or(json!(null))
+            } else if let Ok(v) = row.try_get::<Option<f64>, _>(i) {
+                v.map(|v| json!(v)).unwrap_or(json!(null))
+            } else if let Ok(v) = row.try_get::<Option<String>, _>(i) {
+                v.map(|v| json!(v)).unwrap_or(json!(null))
+            } else {
+                json!(null)
+            };
+            obj.insert(column.name().to_string(), value);
+        }
+        out.push(serde_json::Value::Object(obj));
+    }
+    Ok(out)
 }
 
 // ---------------------------------------------------------------------------

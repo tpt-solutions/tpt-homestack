@@ -85,7 +85,7 @@ Key decisions
 - [x] Sandbox limits: memory cap, fuel/instruction limit, timeouts
 - [x] Plugin migrations (declared in the manifest, run by the host) — forward-only `[[migrations]]`, checksummed, applied in one transaction with the install; tested in tests/lifecycle.rs
 - [x] Plugin API route dispatch (`/api/<plugin-id>/…` to the WASM handler)
-- [ ] Declarative UI: manifest-defined pages, forms, lists, tables, detail views rendered by the shell
+- [x] Declarative UI: manifest-defined pages, forms, lists, tables, detail views rendered by the shell — table (with row links), list, detail (by ?id=) and form pages; escaped output; verified through a session on the ticker example. Not built: search, pagination beyond 200 rows, edit/delete actions in the UI
 - [ ] Plugin lifecycle: install, enable, disable, update, uninstall (with data retention option) — install, upgrade and uninstall (keep and drop data) are tested; enable/disable exist but have no automated test
 - [x] Plugin package format (`.tptp` archive: wasm + manifest + assets) with checksum
 - [ ] Optional signature verification
