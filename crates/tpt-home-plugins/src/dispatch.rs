@@ -42,34 +42,47 @@ pub async fn api_invoke(
     Query(query): Query<std::collections::HashMap<String, String>>,
     body: axum::body::Bytes,
 ) -> Result<Response, ApiError> {
-    let Some(plugin) = crate::registry::get_enabled(&plugin_id) else {
-        return Err(ApiError::not_found(format!(
-            "no enabled plugin '{plugin_id}'"
-        )));
-    };
-
     let query_string = query
         .iter()
         .map(|(k, v)| format!("{k}={v}"))
         .collect::<Vec<_>>()
         .join("&");
     let body = (!body.is_empty()).then(|| String::from_utf8_lossy(&body).into_owned());
+    invoke_plugin(&plugin_id, method.as_str(), &rest, &query_string, body).await
+}
+
+/// Run one call against an enabled plugin, whatever its runtime. `rest` is the
+/// path below `/api/<plugin_id>` without its leading slash. Shared by the HTTP
+/// route and the MCP tools, so both get the same runtime and permission rules.
+pub async fn invoke_plugin(
+    plugin_id: &str,
+    method: &str,
+    rest: &str,
+    query: &str,
+    body: Option<String>,
+) -> Result<Response, ApiError> {
+    let Some(plugin) = crate::registry::get_enabled(plugin_id) else {
+        return Err(ApiError::not_found(format!(
+            "no enabled plugin '{plugin_id}'"
+        )));
+    };
+
     if let Backend::External(base) = &plugin.backend {
         let timeout = std::time::Duration::from_millis(plugin.manifest.limits.max_millis);
         return Ok(crate::external::forward(
             base,
-            method.as_str(),
+            method,
             &format!("/{rest}"),
-            &query_string,
+            query,
             body,
             timeout,
         )
         .await);
     }
     let request = PluginRequest {
-        method: method.as_str().to_string(),
+        method: method.to_string(),
         path: format!("/{rest}"),
-        query: query_string,
+        query: query.to_string(),
         body,
     };
 

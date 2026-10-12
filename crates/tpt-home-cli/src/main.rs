@@ -21,11 +21,12 @@ use tpt_home_core::config::Config;
 /// startup tasks) in the binary. Add an entry for every compiled-in
 /// blueprint.
 #[allow(dead_code)]
-static BLUEPRINT_LINK_ANCHORS: [fn() -> &'static str; 4] = [
+static BLUEPRINT_LINK_ANCHORS: [fn() -> &'static str; 5] = [
     tpt_home_bp_notes::__link_anchor,
     tpt_home_bp_drop::__link_anchor,
     tpt_home_bp_track::__link_anchor,
     tpt_home_plugins::__link_anchor,
+    tpt_home_mcp::__link_anchor,
 ];
 
 #[derive(Parser)]
@@ -73,6 +74,12 @@ enum Command {
     User {
         #[command(subcommand)]
         cmd: UserCmd,
+    },
+    /// Serve MCP over stdio for a local AI agent (the HTTP endpoint is POST /api/mcp).
+    Mcp {
+        /// API token whose scopes decide what the agent can reach.
+        #[arg(long, env = "TPT_HOME_MCP_TOKEN")]
+        token: String,
     },
     /// Manage API tokens for scripts, agents and external plugins.
     Token {
@@ -209,6 +216,7 @@ async fn main() -> anyhow::Result<()> {
         Command::New { name } => scaffold::new_blueprint(&name),
         Command::User { cmd } => user_cmd(cli.data_dir, cmd).await,
         Command::Token { cmd } => token_cmd(cli.data_dir, cmd).await,
+        Command::Mcp { token } => mcp_cmd(cli.data_dir, token).await,
         Command::Backup { out_dir } => backup::backup(&load_config(cli.data_dir)?, out_dir).await,
         Command::Restore { backup, yes } => {
             backup::restore(&load_config(cli.data_dir)?, &backup, yes).await
@@ -314,6 +322,17 @@ async fn migrate(data_dir: Option<std::path::PathBuf>) -> anyhow::Result<()> {
             println!("applied {key}");
         }
     }
+    Ok(())
+}
+
+async fn mcp_cmd(data_dir: Option<std::path::PathBuf>, token: String) -> anyhow::Result<()> {
+    let cfg = load_config(data_dir)?;
+    let db = tpt_home_api::init_server(cfg).await?;
+    // Plugins are loaded by the server at startup; a stdio session does it here.
+    tpt_home_plugins::lifecycle::load_installed(&db).await?;
+    let caller = tpt_home_mcp::caller_for_token(&db, &token).await?;
+    tracing::info!(user = %caller.user.username, "mcp stdio session started");
+    tpt_home_mcp::run_stdio(caller).await?;
     Ok(())
 }
 

@@ -18,7 +18,7 @@ use axum::middleware::Next;
 use axum::response::{IntoResponse, Response};
 use tracing::Instrument;
 
-use crate::auth::api_token::{resolve_api_token, scope_allows};
+use crate::auth::api_token::{TokenScopes, resolve_api_token, scope_allows};
 use crate::auth::session::{parse_session_cookie, resolve_session};
 use crate::auth::user::AuthUser;
 use crate::db::DbPool;
@@ -41,6 +41,8 @@ pub async fn auth_resolver(State(db): State<DbPool>, req: Request, next: Next) -
     {
         let mut req = req;
         req.extensions_mut().insert(user);
+        req.extensions_mut()
+            .insert(TokenScopes(vec!["api".to_string()]));
         return next.run(req).await;
     }
 
@@ -49,6 +51,7 @@ pub async fn auth_resolver(State(db): State<DbPool>, req: Request, next: Next) -
             Ok(Some(resolved)) if is_api && scope_allows(&resolved.scopes, req.uri().path()) => {
                 let mut req = req;
                 req.extensions_mut().insert(resolved.user);
+                req.extensions_mut().insert(TokenScopes(resolved.scopes));
                 next.run(req).await
             }
             Ok(Some(_)) => (

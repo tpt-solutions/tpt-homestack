@@ -133,15 +133,15 @@ Four tiers sharing one manifest + capability model: JS scripts (Boa), WASM (Rust
 - [ ] Optional (stretch): admin-approved local process supervision from the manifest
 
 ### E. MCP server (`tpt-home-mcp`)
-- [ ] Hand-rolled JSON-RPC 2.0 (`initialize`, `tools/list`, `tools/call`); only add an MCP crate if `cargo deny` clears it
-- [ ] Streamable HTTP transport at `POST /api/mcp` (bearer auth, rate limit)
-- [ ] Stdio transport: `tpt-home mcp --token ...`
-- [ ] Add `description` + `schema` to `RouteEntry` (macro args; default description from the doc comment)
-- [ ] Derive tools from enabled blueprint routes and plugin manifests (`[[tables]]`, form actions) + generic `plugin_call`
-- [ ] Execute tool calls through the in-process router with role enforcement (`Role::allows`) and rate limiting; never expose public routes
-- [ ] `docs/AI_PLUGIN_GUIDE.md` so an AI agent can write sandboxed JS plugins
-- [ ] Optional: admin-only `plugin_install` MCP tool with a human approval step
-- [ ] MCP tests: scripted JSON-RPC sessions over stdio and HTTP; non-admin token cannot call admin tools
+- [x] Hand-rolled JSON-RPC 2.0 (`initialize`, `tools/list`, `tools/call`); only add an MCP crate if `cargo deny` clears it — no MCP crate added
+- [x] Streamable HTTP transport at `POST /api/mcp` (bearer auth, rate limit) — request/response JSON only (no SSE streaming); the server's global rate limit applies
+- [x] Stdio transport: `tpt-home mcp --token ...` — logs now go to stderr so stdout carries only protocol lines
+- [ ] Add `description` + `schema` to `RouteEntry` (macro args; default description from the doc comment) — NOT DONE: tools are derived from plugin manifests, so route metadata is not needed yet
+- [ ] Derive tools from enabled blueprint routes and plugin manifests (`[[tables]]`, form actions) + generic `plugin_call` — PARTIAL: plugin tools only (plugins_list, plugin_call, form actions); blueprint routes are not exposed
+- [ ] Execute tool calls through the in-process router with role enforcement (`Role::allows`) and rate limiting; never expose public routes — PARTIAL: calls go through invoke_plugin, not the router; auth, token scope and plugin permissions apply; rate limiting is the HTTP server's global limit, not per tool; stdio is not rate limited
+- [x] `docs/AI_PLUGIN_GUIDE.md` so an AI agent can write sandboxed JS plugins
+- [ ] Optional: admin-only `plugin_install` MCP tool with a human approval step — NOT DONE (optional)
+- [ ] MCP tests: scripted JSON-RPC sessions over stdio and HTTP; non-admin token cannot call admin tools — PARTIAL: 9 in-process protocol and authorization tests, plus manual live runs of stdio and HTTP; no automated transport test
 
 ### F. Housekeeping
 - [ ] Update `docs/PLUGINS.md` for the new runtimes, tokens and MCP

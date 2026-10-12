@@ -2885,6 +2885,7 @@ dependencies = [
  "tpt-home-bp-notes",
  "tpt-home-bp-track",
  "tpt-home-core",
+ "tpt-home-mcp",
  "tpt-home-plugins",
  "tracing",
  "uuid",
@@ -2918,6 +2919,25 @@ dependencies = [
  "proc-macro2",
  "quote",
  "syn 2.0.119",
+]
+
+[[package]]
+name = "tpt-home-mcp"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "axum",
+ "http-body-util",
+ "inventory",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "tokio",
+ "toml",
+ "tpt-home-core",
+ "tpt-home-plugins",
+ "tracing",
+ "wasmi",
 ]
 
 [[package]]

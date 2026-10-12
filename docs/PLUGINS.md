@@ -48,7 +48,9 @@ cargo build --release --target wasm32-unknown-unknown
 The example in [`plugins/tpt-home-bp-calendar/plugin.toml`](../plugins/tpt-home-bp-calendar/plugin.toml) uses every section.
 
 For writing a wasm plugin in a language other than Rust, see the binary
-interface in [`PLUGIN_ABI.md`](PLUGIN_ABI.md).
+interface in [`PLUGIN_ABI.md`](PLUGIN_ABI.md). For an AI agent writing or
+using plugins, see [`AI_PLUGIN_GUIDE.md`](AI_PLUGIN_GUIDE.md); plugins are also
+exposed to agents over MCP (`POST /api/mcp`, or `tpt-home mcp --token …`).
 
 ## External plugins (`runtime = "external"`)
 

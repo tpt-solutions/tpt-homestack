@@ -30,6 +30,11 @@ pub struct ResolvedToken {
     pub scopes: Vec<String>,
 }
 
+/// The scopes of the credential that authenticated a request, attached as a
+/// request extension. Cookie sessions carry `["api"]`.
+#[derive(Debug, Clone)]
+pub struct TokenScopes(pub Vec<String>);
+
 /// Token metadata for listings. The secret and its hash are never included.
 #[derive(Debug, Clone)]
 pub struct TokenInfo {
