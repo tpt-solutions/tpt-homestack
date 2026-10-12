@@ -110,7 +110,7 @@ Four tiers sharing one manifest + capability model: JS scripts (Boa), WASM (Rust
 - [x] Wall-clock timeout for plugin calls (checked at every host call; pure guest loops are bounded by fuel only, see docs/PLUGINS.md)
 
 ### B. JS script runtime (Boa)
-- [x] Add Boa dependency (pinned); verify license and tree with `cargo deny` — pinned `=0.21.1` behind the `js` feature; licenses/bans/sources pass; `cargo deny check advisories` fails on `paste` (RUSTSEC-2024-0436, unmaintained, pulled only by Boa) — needs a decision. Release binary: 10.33 MiB without js, 18.31 MiB with.
+- [x] Add Boa dependency (pinned); verify license and tree with `cargo deny` — pinned `=0.21.1` behind the `js` feature; licenses/bans/sources pass; `paste` advisory (RUSTSEC-2024-0436, unmaintained proc-macro pulled only by Boa) is ignored in `deny.toml` with a reason; remove it when Boa drops `paste`. Release binary: 10.33 MiB without js, 18.31 MiB with.
 - [x] Script contract: `handle(req) -> {status, content_type, body}`; only global is `tpt` (log, db, kv, storage) backed by `HostServices`
 - [x] Lock down the engine: no `eval`/`Function`, imports, fs, net or timers
 - [x] Map `[limits]` to the engine: memory cap, instruction budget, wall-clock deadline (approximate: loop budget from max_fuel, recursion 256; no heap cap, bounded by source size and host caps)
