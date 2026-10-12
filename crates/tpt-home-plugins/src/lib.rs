@@ -11,8 +11,10 @@
 
 pub mod dispatch;
 pub mod external;
+pub mod hooks;
 pub mod host;
 pub mod host_api;
+pub mod jobs;
 pub mod lifecycle;
 pub mod manifest;
 pub mod package;

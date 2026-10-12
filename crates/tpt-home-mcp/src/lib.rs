@@ -256,8 +256,15 @@ async fn call_tool(caller: &Caller, params: &Value) -> Result<Value, (i64, Strin
             if !scope_allows(&caller.scopes, &path) {
                 Err("token scope does not allow this plugin".to_string())
             } else {
-                let response =
-                    invoke_plugin(&plugin, "POST", &action, "", Some(arguments.to_string())).await;
+                let response = invoke_plugin(
+                    Some(&caller.user),
+                    &plugin,
+                    "POST",
+                    &action,
+                    "",
+                    Some(arguments.to_string()),
+                )
+                .await;
                 Ok(render(response).await)
             }
         }
@@ -332,7 +339,15 @@ async fn plugin_call(caller: &Caller, args: &Value) -> Result<Value, String> {
     if !scope_allows(&caller.scopes, &format!("/api/{plugin}{path}")) {
         return Err("token scope does not allow this plugin".into());
     }
-    let response = invoke_plugin(plugin, &method, path.trim_start_matches('/'), query, body).await;
+    let response = invoke_plugin(
+        Some(&caller.user),
+        plugin,
+        &method,
+        path.trim_start_matches('/'),
+        query,
+        body,
+    )
+    .await;
     Ok(render(response).await)
 }
 

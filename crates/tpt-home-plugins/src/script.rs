@@ -97,14 +97,16 @@ const PRELUDE: &str = r#"
     kvDel: __tpt_kv_del,
     storageRead: __tpt_storage_read,
     storageWrite: __tpt_storage_write,
+    now: __tpt_now,
   };
   for (const name of ["__tpt_log", "__tpt_db_query", "__tpt_db_execute", "__tpt_kv_get",
-      "__tpt_kv_set", "__tpt_kv_del", "__tpt_storage_read", "__tpt_storage_write"]) {
+      "__tpt_kv_set", "__tpt_kv_del", "__tpt_storage_read", "__tpt_storage_write", "__tpt_now"]) {
     delete globalThis[name];
   }
   const parse = (text) => (text === null ? null : JSON.parse(text));
   const tpt = Object.freeze({
     log: (...parts) => raw.log(parts.map((p) => String(p)).join(" ")),
+    now: () => parse(raw.now()),
     db: Object.freeze({
       query: (sql) => parse(raw.dbQuery(String(sql))),
       execute: (sql) => raw.dbExecute(String(sql)),
@@ -223,8 +225,9 @@ fn failure(context: &Context, error: JsError) -> anyhow::Error {
 }
 
 fn install_natives(context: &mut Context) -> JsResult<()> {
-    let natives: [(&str, usize, NativeFunction); 8] = [
+    let natives: [(&str, usize, NativeFunction); 9] = [
         ("__tpt_log", 1, NativeFunction::from_fn_ptr(native_log)),
+        ("__tpt_now", 0, NativeFunction::from_fn_ptr(native_now)),
         (
             "__tpt_db_query",
             1,
@@ -307,6 +310,12 @@ fn native_log(_this: &JsValue, args: &[JsValue], context: &mut Context) -> JsRes
         host_of(context)?.services.borrow_mut().log(message),
     )?;
     Ok(JsValue::undefined())
+}
+
+fn native_now(_this: &JsValue, _args: &[JsValue], context: &mut Context) -> JsResult<JsValue> {
+    let host = host_of(context)?;
+    let now = settle(host, host.services.borrow_mut().now())?;
+    json_or_null(now)
 }
 
 fn native_db_query(_this: &JsValue, args: &[JsValue], context: &mut Context) -> JsResult<JsValue> {

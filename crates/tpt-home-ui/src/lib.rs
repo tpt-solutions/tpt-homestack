@@ -411,6 +411,24 @@ pub fn plugin_form_page(fields: &[String], action: &str) -> String {
 }
 
 /// Plugin error page fragment.
+/// A `summary` page: one card per `(label, value)`, in a responsive grid.
+pub fn plugin_summary_page(metrics: &[(String, String)]) -> String {
+    let cards: String = metrics
+        .iter()
+        .map(|(label, value)| {
+            format!(
+                "<div class=\"card\"><div class=\"muted\">{}</div>\
+                 <div style=\"font-size:28px;font-weight:600;margin-top:4px\">{}</div></div>",
+                esc(label),
+                esc(value)
+            )
+        })
+        .collect();
+    format!(
+        "<div style=\"display:grid;grid-template-columns:repeat(auto-fit,minmax(160px,1fr));gap:12px\">{cards}</div>"
+    )
+}
+
 pub fn plugin_error_page(message: &str) -> String {
     format!("<div class=\"msg error\">{}</div>", esc(message))
 }

@@ -16,6 +16,8 @@ export interface Request {
   /** Raw query string without the leading `?`. */
   query: string;
   body: string | null;
+  /** The signed-in caller. Absent for anonymous calls (none today: plugin routes are protected). */
+  user?: { id: number; username: string; role: "admin" | "user" };
 }
 
 /** Response returned from `handle`. */
@@ -28,9 +30,22 @@ export interface Response {
 /** Row objects keyed by column name. */
 export type Row = Record<string, string | number | null>;
 
+/** The clock, in Unix seconds and in the server's local zone. */
+export interface Now {
+  unix: number;
+  /** `YYYY-MM-DD` in the server's local zone. */
+  local_date: string;
+  local_hour: number;
+  local_minute: number;
+  utc_offset_minutes: number;
+}
+
 export interface Tpt {
   /** Always allowed. Bounded to 100 lines per call. */
   log(...parts: unknown[]): void;
+
+  /** Always allowed. The current time. */
+  now(): Now;
 
   db: {
     /** One scoped SELECT on `<id>_*` tables. `null` when denied or failed. */

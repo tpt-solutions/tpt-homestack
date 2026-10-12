@@ -45,6 +45,8 @@ use std::time::{Duration, Instant};
 use serde::{Deserialize, Serialize};
 use wasmi::{AsContext, Caller, Engine, Linker, Module, Store};
 
+use tpt_home_core::auth::user::AuthUser;
+
 use crate::host::{HostError, HostResult, HostServices, MAX_STRING_RESULT};
 use crate::manifest::PluginManifest;
 
@@ -58,6 +60,29 @@ pub struct PluginRequest {
     pub query: String,
     #[serde(default)]
     pub body: Option<String>,
+    /// The signed-in caller, when there is one. Omitted from the JSON when
+    /// absent, so guests that ignore it see the same shape as before.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub user: Option<PluginUser>,
+}
+
+/// The caller as a plugin sees it. Identity only: no credential or session.
+#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+pub struct PluginUser {
+    pub id: i64,
+    pub username: String,
+    /// `admin` or `user`.
+    pub role: String,
+}
+
+impl From<&AuthUser> for PluginUser {
+    fn from(user: &AuthUser) -> Self {
+        Self {
+            id: user.id,
+            username: user.username.clone(),
+            role: user.role.as_str().to_string(),
+        }
+    }
 }
 
 /// The plugin's response, unpacked by the dispatcher.

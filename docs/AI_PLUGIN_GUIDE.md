@@ -57,7 +57,8 @@ Your script defines a global `handle(req)` and returns:
 
 ```js
 function handle(req) {
-  // req: { method, path, query, body }   path is relative to /api/<id>
+  // req: { method, path, query, body, user? }   path is relative to /api/<id>
+  // user: { id, username, role } for the caller; absent when there is none
   return { status: 200, content_type: "application/json", body: "[]" };
 }
 ```
@@ -72,6 +73,7 @@ The only host object is the frozen global `tpt`. The typings are in
 | `tpt.kv.get/set/del` | `kv` | value or `null`; `true`/`false` for writes |
 | `tpt.storage.read/write` | `storage` | file text or `null`; `true`/`false` |
 | `tpt.log(...)` | none | nothing (100 lines kept per call) |
+| `tpt.now()` | none | `{unix, local_date, local_hour, local_minute, utc_offset_minutes}` (server local zone) |
 
 Denied or failed calls never throw. Check for `null`/`false`.
 
@@ -88,6 +90,72 @@ Denied or failed calls never throw. Check for `null`/`false`.
   no hard cap, so keep data sizes modest.
 - **Source only:** the script is the whole program. Build nothing; the host
   parses it at install.
+
+## Summary pages
+
+A `summary` page shows metric cards, each computed from one scoped SELECT. No
+handler code is needed:
+
+```toml
+[[pages]]
+path = "/summary"
+title = "Summary"
+kind = "summary"
+metrics = [
+    { label = "Items", sql = "SELECT COUNT(*) FROM notes_quick_notes" },
+    { label = "Average", sql = "SELECT AVG(qty) FROM notes_quick_items" },
+]
+```
+
+Up to 12 metrics. Each SQL must be one SELECT that passes the table-scope
+rules, checked at install. The first column of the first row is shown: an
+integer as is, a float to two decimals, and an empty result as an em dash.
+Grouped metrics (one row per day or category) are not supported yet.
+
+## Signed inbound endpoints
+
+A sensor or service can post events to a plugin without a login. Declare the
+endpoint in the manifest:
+
+```toml
+[[hooks]]
+name = "feed"          # part of the URL: /api/plugin-hooks/<id>/feed
+```
+
+An admin creates the secret once, and it is shown once:
+`POST /api/plugins/<id>/hooks/feed/secret` returns `{"secret", "url"}`.
+Rotating it replaces the old secret at once.
+
+The sender signs each request with HMAC-SHA256 over `"<timestamp>.<body>"`,
+using the secret, and sends the Unix time and the hex digest in
+`X-Tpt-Timestamp` and `X-Tpt-Signature`. It must send `Content-Type:
+application/json` (the server's content-type guard refuses other types). The
+host checks the signature, and that the timestamp is within 5 minutes of the
+server clock, then calls your handler at `POST /hooks/feed` with the body as
+text in `req.body`. Your handler returns `200` to accept, and the sender gets
+`202`. A handler failure gives the sender `500`.
+
+Every refusal is the same `401`: unknown plugin, disabled plugin, undeclared
+hook, no secret, or a bad signature. Replays inside the 5-minute window are
+not caught. Uninstalling the plugin deletes its secrets.
+
+## Scheduled jobs
+
+A plugin can run a handler on a timer. Declare it in the manifest:
+
+```toml
+[[jobs]]
+name = "sweep"        # unique in the plugin; for logs
+every = "5m"          # count + s|m|h|d, at least 10s
+path = "/sweep"       # handler below /api/<id>, called as POST with no caller
+```
+
+The host calls `POST /api/<id>/sweep` once per interval while the plugin is
+enabled. The first run is one interval after the server first sees the job,
+and jobs never overlap: a job waits for its previous run to finish. Each run
+is bounded by `max_millis`, plus one second. A job's handler gets no `user`,
+so it must not rely on a caller. Up to 10 jobs per plugin. Results are logged;
+they are not yet shown on the admin jobs page.
 
 ## Packaging and installing
 

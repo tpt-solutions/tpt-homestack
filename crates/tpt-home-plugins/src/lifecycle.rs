@@ -37,6 +37,22 @@ inventory::submit! {
 
 inventory::submit! {
     tpt_home_core::MigrationEntry {
+        key: "tpt-home-plugins:003_plugin_hooks",
+        sql: r#"
+            CREATE TABLE IF NOT EXISTS plugin_hooks (
+                plugin_id        TEXT    NOT NULL,
+                name             TEXT    NOT NULL,
+                secret           TEXT    NOT NULL,
+                created_at       INTEGER NOT NULL,
+                last_received_at INTEGER,
+                PRIMARY KEY (plugin_id, name)
+            );
+        "#,
+    }
+}
+
+inventory::submit! {
+    tpt_home_core::MigrationEntry {
         key: "tpt-home-plugins:002_plugin_migrations",
         sql: r#"
             CREATE TABLE IF NOT EXISTS plugin_migrations (
@@ -449,6 +465,12 @@ pub async fn uninstall(db: &SqlitePool, id: &str, keep_data: bool) -> Result<u32
         std::fs::remove_dir_all(&dir)?;
     }
     sqlx::query("DELETE FROM plugins WHERE id = ?1")
+        .bind(id)
+        .execute(db)
+        .await?;
+    // Signing secrets go even when data is kept: a removed plugin must not
+    // keep accepting signed requests.
+    sqlx::query("DELETE FROM plugin_hooks WHERE plugin_id = ?1")
         .bind(id)
         .execute(db)
         .await?;

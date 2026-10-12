@@ -8,7 +8,7 @@
 #![cfg(feature = "js")]
 
 use tpt_home_plugins::manifest::{self, Permissions, PluginManifest};
-use tpt_home_plugins::runtime::{PluginRequest, PluginResponse};
+use tpt_home_plugins::runtime::{PluginRequest, PluginResponse, PluginUser};
 use tpt_home_plugins::script::{self, ScriptSource};
 
 fn manifest_with(max_fuel: u64, max_millis: u64) -> PluginManifest {
@@ -36,6 +36,7 @@ fn request() -> PluginRequest {
         path: "/".into(),
         query: String::new(),
         body: None,
+        user: None,
     }
 }
 
@@ -239,4 +240,71 @@ fn host_call_loop_hits_the_deadline() {
     .unwrap_err()
     .to_string();
     assert!(msg.contains("deadline"), "{msg}");
+}
+
+#[test]
+fn now_gives_the_clock_without_any_grant() {
+    let r = ok(r#"function handle() {
+        const t = tpt.now();
+        const ok = t.unix > 1700000000
+            && /^\d{4}-\d{2}-\d{2}$/.test(t.local_date)
+            && t.local_hour >= 0 && t.local_hour < 24
+            && t.local_minute >= 0 && t.local_minute < 60
+            && Math.abs(t.utc_offset_minutes) <= 14 * 60;
+        return { status: 200, body: ok ? "ok" : JSON.stringify(t) };
+    }"#);
+    assert_eq!(r.body, "ok");
+}
+
+#[test]
+fn now_is_frozen_out_of_the_global_surface() {
+    let r = ok(r#"function handle() {
+        return { status: 200, body: typeof __tpt_now + " " + typeof tpt.now };
+    }"#);
+    assert_eq!(r.body, "undefined function");
+}
+
+/// Like [`run`], with a caller on the request.
+fn run_as_user(source: &str) -> Result<PluginResponse, anyhow::Error> {
+    let source = source.to_string();
+    std::thread::Builder::new()
+        .stack_size(64 * 1024 * 1024)
+        .spawn(move || {
+            let script = ScriptSource::new(source)?;
+            let dir = tempfile::tempdir()?;
+            let mut req = request();
+            req.user = Some(PluginUser {
+                id: 7,
+                username: "ana".into(),
+                role: "user".into(),
+            });
+            script::call_script(
+                &script,
+                &manifest_with(50_000_000, 5_000),
+                &req,
+                "scripts",
+                &Permissions::default(),
+                &dir.path().join("none.db"),
+                dir.path(),
+            )
+        })
+        .expect("spawn")
+        .join()
+        .expect("script run panicked")
+}
+
+#[test]
+fn the_caller_reaches_the_script_and_is_absent_when_anonymous() {
+    let r = run_as_user(
+        r#"function handle(req) {
+        return { status: 200, body: req.user.username + " " + req.user.role + " " + req.user.id };
+    }"#,
+    )
+    .expect("script should succeed");
+    assert_eq!(r.body, "ana user 7");
+
+    let anonymous = ok(r#"function handle(req) {
+        return { status: 200, body: String("user" in req) };
+    }"#);
+    assert_eq!(anonymous.body, "false");
 }

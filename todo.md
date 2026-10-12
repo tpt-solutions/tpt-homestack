@@ -190,17 +190,32 @@ Four tiers sharing one manifest + capability model: JS scripts (Boa), WASM (Rust
 - [x] Job visibility: admin page `/admin/jobs` (sidebar "Admin · Jobs") and `GET /api/admin/jobs` (admin only) show each job's period, timeout, last start and finish, last outcome and error, next run, runs and failures. Status is kept in memory, so it resets on restart. Verified live: the Drop cleanup job's first run was recorded as `ok`, and viewers and anonymous callers were refused
 - [x] Job timeout: `#[bp_job(timeout = "...")]`, default 5 minutes. A run over its cap is aborted and logged; runs never overlap because the next tick waits for the current run. Tested with a run that never returns; the job keeps running
 - [x] Drop's expiry cleanup moved from `StartupEntry` to `#[bp_job(every = "1m")]`, so there is one scheduling mechanism. Behaviour change: the first sweep runs one minute after boot instead of immediately
-- [ ] `tpt-home new --template scheduled-job` (the job hook is now available)
+- [x] `tpt-home new --template scheduled-job` (the job hook is now available)
 - [x] Webhook signature check (`tpt_home_core::webhook`): HMAC-SHA256 over `"<timestamp>.<body>"`, constant-time comparison, timestamp window against replays. Verified against RFC 4231 test vectors 1 and 6 and against tampered bodies, wrong secrets, stale and future timestamps, and malformed headers
 - [x] Webhook route and secret management: admin CRUD at `/api/webhooks` (secret shown once, `secret` never listed), public receiver `POST /api/hooks/{name}` verified with `webhook::verify` (window 5 min), bodies up to 64 KiB stored in `webhook_deliveries` (newest 200 kept). Verified live with 24 checks (signature, timestamps, unknown names, non-admin 403, duplicate 409, non-UTF-8, oversized, delete) and a 205-delivery retention check in the database
-- [ ] Webhook delivery to blueprint code: blueprints currently read `webhook_deliveries` themselves; a push hook (`#[bp_webhook]`) that calls a handler per accepted delivery is not built
-- [ ] Webhook replay protection inside the time window needs a nonce store; not built
-- [ ] Global rate limit (240 requests per 60 s per client, all routes) also applies to webhook senders; a bursty sender gets 429. Decide whether webhooks need their own limit
+- [ ] Webhook delivery to blueprint code (low priority: sensor-alerts reads deliveries from its job, so no push hook is needed yet): blueprints currently read `webhook_deliveries` themselves; a push hook (`#[bp_webhook]`) that calls a handler per accepted delivery is not built
+- [x] Webhook replay protection inside the window: decided not to build a nonce store. The 5-minute window limits replay to that window, and a captured request can be resent within it. Residual risk accepted for home sensors; revisit if webhooks carry commands (unlock, disarm)
+- [x] Webhook rate limit: decided to keep the global limit (240 requests per 60 s per client). Home sensors send a few events a minute at most; revisit if a sender batches events. Documented as a known limit
 - [x] Track CSV import and export: `GET /api/track/tables/{id}/export.csv` (RFC 4180, CRLF, header of field names) and `POST /api/track/tables/{id}/import` (`text/csv` body up to 1 MiB, 5000 rows max). Header maps columns case-insensitively, unknown or duplicate columns are refused, every cell is checked against its kind, and any bad row means nothing is saved (first 20 problems reported with line numbers). Verified with 19 live checks and a byte-identical export → import → export round trip. The content-type guard now also accepts `text/csv`; this is safe because HTML forms cannot send it and cross-origin requests need a preflight that is not granted
 - [x] Seven starter templates for `tpt-home new --template`: `basic`, `records`, `logbook`, `file-inbox`, `scheduled-job`, `dashboard`, `scheduled-fetch`. Multi-file layout (`templates/<kind>/src/`) with per-template extra dependencies. Verified together in one scratch workspace: all 10 blueprints linked, every API route exercised, admin-only routes return 401 anonymous and 403 for a user, pages render 200, job-driven rows appear on a 10s schedule, file upload/download/delete round-trips byte for byte, no panics or job failures in the log
 - [x] CI job `templates` (`scripts/check-templates.sh`) scaffolds every template into a temp copy of the tree, checks each generated crate and builds the CLI that links them all; runs under the CI `-D warnings` setting. Passes locally in about 2 minutes
-- [ ] Home security and automation blueprint (`sensor-alerts`): store sensor events posted with an API token, run rules in a `#[bp_job]` (door open after 23:00, no motion for 24h, sensor silent), record alerts. Depends on the webhook route and an outbound notification channel. Not a substitute for a certified alarm system, and it has no device integrations of its own (cameras, Zigbee/Z-Wave, MQTT would come through external plugins)
+- [x] Sensor-alerts starter template (`--template sensor-alerts`): senders post signed events to a feed webhook; a one-minute `#[bp_job]` reads each delivery once and raises a `quiet-open` alert for a door opened during quiet hours (server local time) and a `silent` alert for a sensor with no report for the set number of hours, once per silence. Admins create the webhook and set the rules on the page. Verified live with 22 checks (access rules, validation, both rules, no repeats, each delivery recorded once) and by generating and testing the crate. Not included: notifications (email, chat), cameras, Zigbee/Z-Wave, MQTT. Those need an outbound channel or external plugins, and this is not a certified alarm system
+- [ ] Outbound notifications for alerts (email or chat). Decision: build this next, after a notification channel is designed (credentials storage and secret handling are the open questions)
 - [x] Template scaffold: `scheduled-fetch` pulls in reqwest (rustls). `cargo deny check` passes on the scratch workspace that includes the generated crate (advisories, bans, licenses, sources). The repo's own CI deny job covers only the repo graph, so generated crates still need a manual check
+
+- [x] Times for users: quiet hours use the server's local time zone (chrono Local); the settings page shows the server's current local time and UTC offset; alert text no longer carries a clock time (each alert's time shows in the viewer's own zone); the scheduled-job snapshot table shows the local time instead of a UTC day. Verified live: the open-door alert only fires when the server's local hour matches, on a machine 12 hours ahead of UTC
+
+### F. Gaps found when checking whether templates can become plugins
+Checked `logbook`, `records` and `sensor-alerts` against the plugin runtimes (wasm/js/external). Plugins have only `db`, `kv`, `storage` and `log` today.
+- [x] Scheduled jobs for plugins: `[[jobs]]` in the manifest (`name`, `every`, `path`) and one host scheduler (`plugins/src/jobs.rs`, started by a startup entry). Sequential runs, bounded by `max_millis`, re-armed on re-enable. Verified by tests/plugin_jobs.rs. Gaps: results are logged only, not on the admin jobs page; runs are not yet audited in the database
+- [x] Current time and timezone for plugins: `tpt.now()` in the JS tier returns Unix seconds plus the server's local date, hour, minute and UTC offset; always allowed. NOT in the WASM tier: adding a host import changes the frozen ABI v1, so that is a separate decision
+- [x] Public (unauthenticated) plugin endpoints with host-verified HMAC signatures: `[[hooks]]` in the manifest, `POST /api/plugin-hooks/<id>/<name>` verified with `tpt_home_core::webhook::verify` (5-minute window, 64 KiB cap, same 401 for every refusal), handler called at `/hooks/<name>` with the verified body. Admin rotates the secret at `/api/plugins/<id>/hooks/<name>/secret`; uninstall deletes secrets. Verified through the real router in tests/plugin_hooks.rs. Gaps: the handler is tested directly, and the router only checks the anonymous refusal of the admin route, not an admin's success through the role guard; no replay store, same as core; secrets are stored in plain text because HMAC needs them
+- [x] Authenticated user identity passed to the plugin handler (`Request.user`: `id`, `username`, `role`) for HTTP and MCP calls, in the JS and WASM tiers (the request JSON gains an optional `user` key, so ABI v1 guests see no change). NOT forwarded to external plugins yet: the forward would need a trusted header; add it with the external tier's next change
+- [ ] Outbound HTTP capability (`http`, per-host allowlist approved by the admin) for fetch/uptime plugins
+- [ ] Notifications capability (push, email or webhook) so alerts and reminders can leave the server
+- [x] Declarative page kinds for summaries: `kind = "summary"` with up to 12 `metrics` (label + one scoped SELECT), shown as cards, checked at install (tests/summary_page.rs). PARTIAL: totals and averages only. Grouped metrics (one row per day or category, needed by `logbook` date grouping and the `dashboard` charts) are not built
+- [x] Port `records` as a plugin first: `plugins/records` (JS), same rules as the template, verified by `tests/records_plugin.rs` through install and dispatch. Deviation: delete is a form page that posts an id, since the plugin UI has no row actions yet
+- [ ] Port `logbook` (needs aggregate pages and time) and `sensor-alerts` (needs jobs, time, public signed endpoint, notifications)
 
 ## Phase 7 — Deployment & Platform Support
 - [x] `docker-compose.yml` (Caddy + Cloudflared only)
@@ -212,11 +227,13 @@ Four tiers sharing one manifest + capability model: JS scripts (Boa), WASM (Rust
 - [ ] Single-binary build process (embedded WASM/assets)
 - [ ] Upgrade/migration path between versions
 - [ ] Optional Dockerfile for the app itself
+- [ ] One-line install script that downloads the right release binary, verifies its checksum, and sets up the service (Linux/Windows); depends on the Phase 10 release pipeline
 
 ## Phase 8 — Quality, Security & Performance
 - [ ] Test coverage for core, macros, API, blueprints, plugins
 - [ ] End-to-end tests (login, blueprint use, plugin install)
 - [ ] Security review: auth, sessions, CSRF, XSS (markdown), path traversal, SQL injection, upload handling
+- [ ] Gate: this security review must pass before remote access (Tailscale or tunnel) is promoted to ordinary users in docs or the wizard
 - [ ] Plugin sandbox security review
 - [ ] Dependency audit (`cargo audit`, `cargo deny`)
 - [ ] Benchmark vs targets: idle RAM < 30 MB, startup < 0.5 s, binary < 25 MB, CPU idle ~0%
@@ -237,10 +254,49 @@ Four tiers sharing one manifest + capability model: JS scripts (Boa), WASM (Rust
 
 ## Phase 10 — Release & Community
 - [ ] Version scheme (semver) and release checklist
-- [ ] CI release pipeline: binaries for Linux x86_64, Linux ARM64, Windows, with checksums
+- [ ] CI release pipeline: binaries for Linux x86_64, Linux ARM64, Windows, with checksums — PARTIAL: written, not run. `.github/workflows/release.yml` (tag `v*`, tag must match workspace version, native runners, SHA256SUMS, GitHub release). NOT YET RUN: needs a first tag push to verify; ARM64 relies on the `ubuntu-22.04-arm` runner
 - [ ] Publish crates to crates.io (core, macros, plugin SDK, official blueprints)
 - [ ] GitHub release and tags
-- [ ] Plugin discovery: curated index/registry (repo-based)
+- [ ] Plugin discovery: curated index/registry (repo-based); the in-app catalog (Phase 11) reads this index
 - [ ] Blueprint/plugin contribution guidelines and templates
 - [ ] Community channels (discussions)
 - [ ] Post-release: collect feedback, triage, roadmap v2
+
+## Phase 11 — Ordinary-user experience (no terminal, no Rust)
+Phases 0-10 serve people comfortable with a shell and a compiler. This phase is for someone who just bought a PC and wants apps running. Depends on release binaries (Phase 10) and plugins that install without compiling (Phase 4/4b).
+- [ ] Native installers: Windows `.msi`/setup exe (installs, registers service, adds Start-menu shortcut that opens the UI); Linux `.deb` and `.rpm`; no Rust toolchain, no manual `init`
+- [ ] Browser-based first-run wizard: create admin, name the server, pick starter apps, choose remote access (extends the existing `/setup` page; no credentials printed to a terminal)
+- [ ] In-app app catalog: browse the plugin index, one-click install/enable/disable/remove from the admin UI (builds on the plugin list and detail pages and the Phase 10 index)
+- [ ] Capability approval written in plain language ("this app can read your notes") instead of raw permission names
+- [ ] Reachable by name on the LAN (mDNS, e.g. `homestack.local`) and a printed or QR link for phones
+- [ ] Remote access scope: private access for the owner and family first, not public sharing. Two primary options offered in the wizard and settings: (1) Tailscale free plan (default: private, no domain, no router changes, works on phones) and (2) Cloudflare domain via Cloudflare Tunnel (a public hostname behind a login, for people who want a normal web address or can't install a client). Netbird and Headscale are docs-only advanced notes; Vercel is not viable (serverless, no inbound tunnels)
+- [ ] "Connect from anywhere" wizard (first-run step and a settings page), simple and basic: sits between the zero-config default and the advanced docs, aimed at ordinary users. Step 1 pick Tailscale or Cloudflare with a one-line trade-off each; step 2 guided steps with live detection (client installed? signed in? reachable?) and plain-language errors; step 3 a per-family-member how-to and a QR code for the phone app. No terminal and no config-file editing
+- [ ] Tailscale wizard path: detect the official client (`tailscale status --json`), show the server's tailnet address and name, offer `tailscale serve` for HTTPS on the `*.ts.net` name, set `secure_cookies` automatically, keep `host = 127.0.0.1` and never bind 0.0.0.0
+- [ ] Decide how Tailscale is integrated: guide the user to install the official client (simplest, nothing bundled) vs. embedding tsnet or similar; check licenses against `deny.toml`; record the decision
+- [ ] On the appliance image (Phase 12), include the Tailscale client and a UI step to sign in and join the tailnet, so no shell is needed
+- [ ] Cloudflare wizard path: guide the user to add a domain to Cloudflare (domain costs a few dollars a year; the tunnel itself is free), create the tunnel and paste or detect the token, run `cloudflared` without editing `docker-compose.yml`, and set `trust_proxy` and `secure_cookies`. Require a login in front of it (Cloudflare Access or the app's own login) and show the "exposed to the internet" warning
+- [ ] Advanced remote access docs: Caddy with a domain, Netbird (fully open source, free hosted tier), Headscale (self-hosted, needs a VPS) with step-by-step instructions
+- [ ] `docs/REMOTE_ACCESS.md`: plain-language guide with Tailscale and Cloudflare first, then the advanced options and honest trade-offs (hosted coordination server, free-tier limits, CGNAT, domain cost); link from `docs/DEPLOYMENT.md` and `README.md`
+- [ ] `tpt-home remote status|setup` CLI backing the wizard (detects Tailscale, Netbird and cloudflared, prints guided steps, updates `config.toml` after `confirm()`); needs a small config-write helper; tested with fake `tailscale`/`cloudflared` scripts on PATH in `crates/tpt-home-cli/tests/remote_cli.rs`
+- [ ] Family access: family members use existing `Role::User` accounts; the wizard offers to create them and shows each one's sign-in how-to; optional later: a per-user remote-access flag (needs a migration)
+- [ ] `trust_proxy` config (default false): `client_key` only trusts `X-Forwarded-For` when set, so the rate limiter can't be evaded by a spoofed header — PARTIAL: code, unit test and docs written; NOT YET BUILT OR TESTED (`cargo test` not run). Still to do: an integration test in `crates/tpt-home-api/tests/integration.rs`, and set `TPT_HOME_TRUST_PROXY=true` for the Caddy/cloudflared setups (documented in `docs/DEPLOYMENT.md`; behind a proxy without it all visitors share one bucket)
+- [ ] Safe defaults when remote access is on: HTTPS or tailnet-only, rate limiting, forced admin password change if still default, and a visible "exposed to the internet" warning in the UI
+- [ ] In-app backup and restore (download/upload a backup file, scheduled automatic backups with retention)
+- [ ] In-app update: check for a new release, apply it, roll back on failure (builds on the upgrade/migration path in Phase 7)
+- [ ] Health and status in the UI (disk space, last backup, version, failed jobs) so problems are visible without logs
+- [ ] Non-developer docs: "Getting started" with screenshots, per-app user guides, troubleshooting (extends the Phase 9 admin and user guide)
+- [ ] Usability test with 2-3 non-developers doing the full path from install to first app
+
+## Phase 12 — Appliance image (dedicated device, no OS setup)
+Goal: flash an image onto a small or low-end device, boot it, and open `homestack.local` from another device. No Linux or Windows install, no terminal. A kernel is still needed, so "replacing the OS" means a minimal purpose-built Linux that runs only homestack. Shares the first-run wizard, in-app update and in-app backup from Phase 11.
+- [ ] Choose the base: Buildroot, Alpine or Yocto (size, ARM64 + x86_64 support, license, update story) and record the decision
+- [ ] Minimal image build pipeline in CI: x86_64 (USB/ISO for mini PCs and old desktops) and ARM64 (Raspberry Pi SD image), with checksums
+- [ ] Image runs only homestack: read-only root, writable data partition, hardened service, no SSH or shell by default (opt-in for admins)
+- [ ] First boot: DHCP, `homestack.local` via mDNS, headless first-run wizard in the browser; no monitor or keyboard needed
+- [ ] Atomic A/B updates with rollback (image or binary), driven from the UI
+- [ ] Data partition grows to fill the disk; backup/restore compatible with the non-appliance install
+- [ ] Hardware support list and tested devices (Pi 4/5, common mini PCs); verify idle RAM and boot time on the smallest target
+- [ ] Docs: flashing guide for non-developers, hardware buying guide
+- [ ] Decide whether to support optional Docker/containers on the image (default: no; keep the image minimal)
+- [ ] Prebuilt-binary constraint: the image has no Rust toolchain, so apps must come from the plugin catalog (Phase 11), not compiled-in blueprints
+- [ ] Convert selected starter templates (e.g. `logbook`, `records`, `sensor-alerts`) into installable plugins so the first catalog entries come from them (templates stay as the developer path)

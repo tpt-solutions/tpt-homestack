@@ -1,0 +1,46 @@
+# Records: a list of things you can add and delete. JavaScript port of the
+# `records` starter template (crates/tpt-home-cli/templates/records).
+# Pack with `tpt-home plugin build plugins/records`; install with db granted.
+
+[plugin]
+id = "records"
+name = "Records"
+version = "0.1.0"
+entry = "main.js"
+runtime = "js"
+
+[permissions]
+db = true
+
+[limits]
+max_fuel = 50000000
+max_memory_mb = 16
+
+[[tables]]
+name = "records"
+columns = [
+    { name = "title", kind = "text" },
+    { name = "notes", kind = "text" },
+    { name = "created_at", kind = "integer" },
+]
+
+[[pages]]
+path = "/list"
+title = "Records"
+kind = "list"
+table = "records"
+columns = ["title", "notes"]
+
+[[pages]]
+path = "/new"
+title = "Add a record"
+kind = "form"
+fields = ["title", "notes"]
+action = "/records"
+
+[[pages]]
+path = "/remove"
+title = "Delete a record"
+kind = "form"
+fields = ["id"]
+action = "/delete"

@@ -2959,6 +2959,7 @@ dependencies = [
  "axum",
  "boa_engine",
  "boa_gc",
+ "chrono",
  "http-body-util",
  "hyper-util",
  "inventory",

@@ -183,7 +183,21 @@ pub struct PageDef {
     /// `table` pages: a `detail` page path. Rows link to it as `?id=<row>`.
     #[serde(default)]
     pub link: Option<String>,
+    /// `summary` pages: one card per metric.
+    #[serde(default)]
+    pub metrics: Vec<MetricDef>,
 }
+
+/// One card on a `summary` page (`metrics = [{ label, sql }]`). The SQL is a
+/// single scoped SELECT whose first column of the first row is shown.
+#[derive(Debug, Clone, Deserialize, PartialEq)]
+pub struct MetricDef {
+    pub label: String,
+    pub sql: String,
+}
+
+/// Most cards one summary page may show.
+pub const MAX_METRICS: usize = 12;
 
 /// A forward-only schema migration (`[[migrations]]`). Applied once per
 /// plugin, in version order, inside the install transaction.
@@ -209,6 +223,68 @@ pub struct PluginManifest {
     pub pages: Vec<PageDef>,
     #[serde(default)]
     pub migrations: Vec<MigrationDef>,
+    #[serde(default)]
+    pub jobs: Vec<JobDef>,
+    #[serde(default)]
+    pub hooks: Vec<HookDef>,
+}
+
+/// A signed inbound endpoint (`[[hooks]]`). Senders post to
+/// `/api/plugin-hooks/<id>/<name>`; the host verifies the HMAC and calls the
+/// plugin at `/hooks/<name>` with the body. See [`crate::hooks`].
+#[derive(Debug, Clone, Deserialize, PartialEq)]
+pub struct HookDef {
+    /// Endpoint name, unique within the plugin. Part of the URL.
+    pub name: String,
+}
+
+/// Most signed endpoints one plugin may declare.
+pub const MAX_HOOKS: usize = 10;
+
+/// A scheduled job (`[[jobs]]`). The host calls `path` below `/api/<id>` with
+/// `POST` and no caller, once every `every`. See [`crate::jobs`].
+#[derive(Debug, Clone, Deserialize, PartialEq)]
+pub struct JobDef {
+    /// Job name for logs and status, unique within the plugin.
+    pub name: String,
+    /// A count and a unit: `s`, `m`, `h` or `d`, e.g. `"5m"`. Minimum `10s`.
+    pub every: String,
+    /// Handler path below `/api/<id>`, e.g. `/sweep`.
+    pub path: String,
+}
+
+/// Most jobs one plugin may declare.
+pub const MAX_JOBS: usize = 10;
+
+/// Parse a job interval such as `"30s"`, `"5m"`, `"1h"` or `"2d"` into seconds.
+/// The same rules as `#[bp_job(every = ...)]`: a count and a unit, at least 10s.
+pub fn job_interval_secs(text: &str) -> Result<u64, String> {
+    let text = text.trim();
+    let Some(unit) = text.chars().last() else {
+        return Err("interval is empty".into());
+    };
+    let digits = &text[..text.len() - unit.len_utf8()];
+    let multiplier = match unit {
+        's' => 1,
+        'm' => 60,
+        'h' => 3_600,
+        'd' => 86_400,
+        _ => {
+            return Err(format!(
+                "invalid interval '{text}': unit must be s, m, h or d"
+            ));
+        }
+    };
+    let count: u64 = digits
+        .parse()
+        .map_err(|_| format!("invalid interval '{text}': expected a number before the unit"))?;
+    let secs = count
+        .checked_mul(multiplier)
+        .ok_or_else(|| format!("interval '{text}' is too large"))?;
+    if secs < 10 {
+        return Err(format!("interval '{text}' is too short: minimum is 10s"));
+    }
+    Ok(secs)
 }
 
 /// Parse and validate a manifest from TOML text.
@@ -320,8 +396,28 @@ fn validate(m: &PluginManifest) -> Result<(), anyhow::Error> {
                     anyhow::bail!("form action '{action}' must be a plain path");
                 }
             }
+            "summary" => {
+                if page.metrics.is_empty() || page.metrics.len() > MAX_METRICS {
+                    anyhow::bail!("summary page '{}' needs 1-{MAX_METRICS} metrics", page.path);
+                }
+                for metric in &page.metrics {
+                    if metric.label.trim().is_empty() || metric.label.chars().count() > 60 {
+                        anyhow::bail!("metric label must be 1-60 characters");
+                    }
+                    if !metric
+                        .sql
+                        .trim_start()
+                        .to_ascii_uppercase()
+                        .starts_with("SELECT")
+                    {
+                        anyhow::bail!("metric '{}' must be a SELECT", metric.label);
+                    }
+                    crate::scope::validate_scoped_sql(&m.plugin.id, &metric.sql)
+                        .map_err(|e| anyhow::anyhow!("metric '{}': {e}", metric.label))?;
+                }
+            }
             other => anyhow::bail!(
-                "page '{}' kind '{other}' must be table|form|list|detail",
+                "page '{}' kind '{other}' must be table|form|list|detail|summary",
                 page.path
             ),
         }
@@ -339,11 +435,59 @@ fn validate(m: &PluginManifest) -> Result<(), anyhow::Error> {
         anyhow::bail!("limits.max_memory_mb must be 1-256");
     }
     validate_migrations(m)?;
+    validate_jobs(m)?;
+    validate_hooks(m)?;
     if m.limits.max_fuel < 1000 {
         anyhow::bail!("limits.max_fuel must be at least 1000");
     }
     if !(1..=60_000).contains(&m.limits.max_millis) {
         anyhow::bail!("limits.max_millis must be 1-60000");
+    }
+    Ok(())
+}
+
+/// Jobs: a bounded count, unique plain names, a valid interval and a plain
+/// handler path.
+fn validate_jobs(m: &PluginManifest) -> Result<(), anyhow::Error> {
+    if m.jobs.len() > MAX_JOBS {
+        anyhow::bail!("at most {MAX_JOBS} jobs per plugin");
+    }
+    let mut names = std::collections::HashSet::new();
+    for job in &m.jobs {
+        valid_component(&job.name, "job name")?;
+        if !names.insert(job.name.as_str()) {
+            anyhow::bail!("job '{}' is declared twice", job.name);
+        }
+        job_interval_secs(&job.every).map_err(|e| anyhow::anyhow!("job '{}': {e}", job.name))?;
+        let plain = job.path.starts_with('/')
+            && job.path.len() > 1
+            && job
+                .path
+                .chars()
+                .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '_' || c == '/')
+            && !job.path.contains("//");
+        if !plain {
+            anyhow::bail!(
+                "job '{}' path '{}' must be a plain path such as /sweep",
+                job.name,
+                job.path
+            );
+        }
+    }
+    Ok(())
+}
+
+/// Signed endpoints: a bounded count and unique plain names.
+fn validate_hooks(m: &PluginManifest) -> Result<(), anyhow::Error> {
+    if m.hooks.len() > MAX_HOOKS {
+        anyhow::bail!("at most {MAX_HOOKS} hooks per plugin");
+    }
+    let mut names = std::collections::HashSet::new();
+    for hook in &m.hooks {
+        valid_component(&hook.name, "hook name")?;
+        if !names.insert(hook.name.as_str()) {
+            anyhow::bail!("hook '{}' is declared twice", hook.name);
+        }
     }
     Ok(())
 }

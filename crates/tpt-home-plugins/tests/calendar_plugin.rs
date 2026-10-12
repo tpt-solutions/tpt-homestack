@@ -87,6 +87,7 @@ fn run() {
                 path: path.into(),
                 query: query.into(),
                 body: body.map(String::from),
+                user: None,
             },
             "calendar",
             perms,

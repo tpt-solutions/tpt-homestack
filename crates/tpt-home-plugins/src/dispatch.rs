@@ -19,7 +19,7 @@ use tpt_home_ui as ui;
 use crate::lifecycle;
 use crate::manifest::Permissions;
 use crate::registry::Backend;
-use crate::runtime::{self, PluginRequest};
+use crate::runtime::{self, PluginRequest, PluginUser};
 
 pub(crate) fn db_path() -> std::path::PathBuf {
     tpt_home_core::config::global().db_path()
@@ -38,6 +38,7 @@ pub(crate) fn storage_dir(id: &str) -> std::path::PathBuf {
 /// parameter, so this only sees plugin traffic.
 pub async fn api_invoke(
     State(_db): State<DbPool>,
+    Extension(user): Extension<AuthUser>,
     Path((plugin_id, rest)): Path<(String, String)>,
     method: axum::http::Method,
     Query(query): Query<std::collections::HashMap<String, String>>,
@@ -49,13 +50,22 @@ pub async fn api_invoke(
         .collect::<Vec<_>>()
         .join("&");
     let body = (!body.is_empty()).then(|| String::from_utf8_lossy(&body).into_owned());
-    invoke_plugin(&plugin_id, method.as_str(), &rest, &query_string, body).await
+    invoke_plugin(
+        Some(&user),
+        &plugin_id,
+        method.as_str(),
+        &rest,
+        &query_string,
+        body,
+    )
+    .await
 }
 
 /// Run one call against an enabled plugin, whatever its runtime. `rest` is the
 /// path below `/api/<plugin_id>` without its leading slash. Shared by the HTTP
 /// route and the MCP tools, so both get the same runtime and permission rules.
 pub async fn invoke_plugin(
+    user: Option<&AuthUser>,
     plugin_id: &str,
     method: &str,
     rest: &str,
@@ -85,6 +95,7 @@ pub async fn invoke_plugin(
         path: format!("/{rest}"),
         query: query.to_string(),
         body,
+        user: user.map(PluginUser::from),
     };
 
     let granted = plugin.effective_permissions();
@@ -175,6 +186,13 @@ pub async fn page(
             let columns = page_columns(&page_def.columns, rows.first());
             ui::plugin_detail_page(&columns, rows.first())
         }
+        "summary" => {
+            let mut cards = Vec::with_capacity(page_def.metrics.len());
+            for metric in &page_def.metrics {
+                cards.push((metric.label.clone(), scalar(&db, &metric.sql).await?));
+            }
+            ui::plugin_summary_page(&cards)
+        }
         "form" => ui::plugin_form_page(
             &page_def.fields,
             &format!("{api_base}{}", page_def.action.as_deref().unwrap_or("/")),
@@ -206,6 +224,24 @@ fn page_columns(declared: &[String], first: Option<&serde_json::Value>) -> Vec<S
         .and_then(serde_json::Value::as_object)
         .map(|o| o.keys().cloned().collect())
         .unwrap_or_default()
+}
+
+/// The first column of the first row of a metric query, as display text.
+/// No row or a NULL shows as an em dash; a float keeps two decimals.
+async fn scalar(db: &DbPool, sql: &str) -> Result<String, ApiError> {
+    let Some(row) = sqlx::query(sql).fetch_optional(db).await? else {
+        return Ok("\u{2014}".to_string());
+    };
+    if let Ok(v) = row.try_get::<Option<i64>, _>(0) {
+        return Ok(v.map_or("\u{2014}".to_string(), |v| v.to_string()));
+    }
+    if let Ok(v) = row.try_get::<Option<f64>, _>(0) {
+        return Ok(v.map_or("\u{2014}".to_string(), |v| format!("{v:.2}")));
+    }
+    if let Ok(v) = row.try_get::<Option<String>, _>(0) {
+        return Ok(v.unwrap_or_else(|| "\u{2014}".to_string()));
+    }
+    Ok("\u{2014}".to_string())
 }
 
 /// Read rows from a plugin's scoped table as JSON objects. `Some(id)` selects a

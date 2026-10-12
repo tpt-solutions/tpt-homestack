@@ -45,6 +45,19 @@ fn failed(e: impl std::fmt::Display) -> HostError {
     HostError::Failed(e.to_string())
 }
 
+/// The clock as a plugin sees it: Unix seconds, plus the server's local date,
+/// hour, minute and UTC offset (quiet hours and date grouping need the local
+/// view).
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
+pub struct Now {
+    pub unix: i64,
+    /// `YYYY-MM-DD` in the server's local zone.
+    pub local_date: String,
+    pub local_hour: u32,
+    pub local_minute: u32,
+    pub utc_offset_minutes: i32,
+}
+
 /// The services one plugin invocation may use. Created per call, so the
 /// SQLite handle and the deadline never outlive the invocation.
 pub struct HostServices {
@@ -117,6 +130,21 @@ impl HostServices {
             self.conn = Some(conn);
         }
         Ok(self.conn.as_mut().expect("just set"))
+    }
+
+    /// `tpt.now()`: the clock, in UTC and in the server's local zone. Always
+    /// allowed; it reveals nothing a plugin cannot already see.
+    pub fn now(&mut self) -> HostResult<Now> {
+        self.check_deadline()?;
+        let utc = chrono::Utc::now();
+        let local = chrono::Local::now();
+        Ok(Now {
+            unix: utc.timestamp(),
+            local_date: local.format("%Y-%m-%d").to_string(),
+            local_hour: local.format("%H").to_string().parse().unwrap_or(0),
+            local_minute: local.format("%M").to_string().parse().unwrap_or(0),
+            utc_offset_minutes: local.offset().local_minus_utc() / 60,
+        })
     }
 
     /// `tpt_log`: always allowed, bounded in count and length.
