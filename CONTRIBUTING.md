@@ -45,7 +45,7 @@ cargo run -p tpt-home-cli -- run   # start the server on http://127.0.0.1:8080
 
 ## Checks
 
-Run these before any change is merged into `main`:
+Run these before any change is merged into `master`:
 
 ```sh
 cargo fmt --all
