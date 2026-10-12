@@ -81,67 +81,67 @@ Key decisions
 - [x] Define `plugin.toml` manifest (id, name, version, permissions, routes, pages, tables)
 - [x] Host functions: DB access (scoped to plugin-prefixed tables), key-value store, HTTP response helpers, logging
 - [x] Host functions: file access (scoped to a plugin directory) — only if permitted by the manifest
-- [ ] Permission model: plugins declare capabilities, admin approves on install
-- [ ] Sandbox limits: memory cap, fuel/instruction limit, timeouts
-- [ ] Plugin migrations (declared in the manifest, run by the host)
+- [x] Permission model: plugins declare capabilities, admin approves on install — install takes an `approve` list; anything not approved is denied at runtime (fail closed); install reports requested vs approved
+- [x] Sandbox limits: memory cap, fuel/instruction limit, timeouts
+- [x] Plugin migrations (declared in the manifest, run by the host) — forward-only `[[migrations]]`, checksummed, applied in one transaction with the install; tested in tests/lifecycle.rs
 - [x] Plugin API route dispatch (`/api/<plugin-id>/…` to the WASM handler)
-- [ ] Declarative UI: manifest-defined pages, forms, lists, tables, detail views rendered by the shell
-- [ ] Plugin lifecycle: install, enable, disable, update, uninstall (with data retention option)
+- [x] Declarative UI: manifest-defined pages, forms, lists, tables, detail views rendered by the shell — table (with row links), list, detail (by ?id=) and form pages; escaped output; verified through a session on the ticker example. Not built: search, pagination beyond 200 rows, edit/delete actions in the UI
+- [x] Plugin lifecycle: install, enable, disable, update, uninstall (with data retention option) — all covered by tests/lifecycle.rs; enable and disable take effect without a restart and keep data
 - [x] Plugin package format (`.tptp` archive: wasm + manifest + assets) with checksum
 - [ ] Optional signature verification
 - [x] Plugin SDK crate (`tpt-home-plugin-sdk`) with a macro-style authoring experience for Rust plugins
 - [ ] Plugin template and example plugin (`tpt-home-bp-calendar`)
-- [ ] Hot load/unload without a server restart
-- [ ] Plugin isolation and failure handling (a crashing plugin must not take down the host)
+- [x] Hot load/unload without a server restart — install, enable, disable and uninstall change the registry at once; verified live and in tests/lifecycle.rs
+- [x] Plugin isolation and failure handling (a crashing plugin must not take down the host) — a trapping guest fails only its own call (sandbox test); the next call runs
 - [ ] Plugin tests and fuzzing of the host boundary
 
 ## Phase 4b — Easy Plugin Authoring (JS scripts, any-language WASM, external processes, MCP)
 Four tiers sharing one manifest + capability model: JS scripts (Boa), WASM (Rust SDK + documented ABI), external processes (any language), MCP for AI agents.
 
 ### A. Foundation (prerequisite for everything below)
-- [ ] Link `tpt-home-plugins` into the CLI binary (Cargo dep + `BLUEPRINT_LINK_ANCHORS` entry) — `tpt-home run` serves no plugins today
-- [ ] Runtime abstraction: replace `LoadedPlugin.module: wasmi::Module` with an enum/trait (`Wasm` | `Script` | `External`); dispatch through it
-- [ ] Add `[plugin] runtime = "wasm" | "js" | "external"` to the manifest (default `wasm`, reject unknown values)
-- [ ] Extract shared `HostServices` (db/kv/storage/log + capability checks + size/row caps) from the wasmi closures; wasmi imports become thin wrappers
-- [ ] Enforce the stored `approved_permissions` at runtime (dispatch currently uses `manifest.permissions`)
-- [ ] Normalize denied-capability behavior (today: `-1` for reads, silent no-op for writes, trap on scope errors) before freezing ABI v1
-- [ ] Package format: allow `manifest.plugin.entry` and `src/**` script files (unpack currently only accepts `plugin.wasm`)
-- [ ] Roll back plugin dir + DB row when load fails after install
-- [ ] Wall-clock timeout for plugin calls (fuel does not cover time spent in host functions)
+- [x] Link `tpt-home-plugins` into the CLI binary (Cargo dep + `BLUEPRINT_LINK_ANCHORS` entry) — `tpt-home run` serves no plugins today
+- [x] Runtime abstraction: replace `LoadedPlugin.module: wasmi::Module` with an enum/trait (`Wasm` | `Script` | `External`); dispatch through it
+- [x] Add `[plugin] runtime = "wasm" | "js" | "external"` to the manifest (default `wasm`, reject unknown values)
+- [x] Extract shared `HostServices` (db/kv/storage/log + capability checks + size/row caps) from the wasmi closures; wasmi imports become thin wrappers
+- [x] Enforce the stored `approved_permissions` at runtime (dispatch currently uses `manifest.permissions`)
+- [x] Normalize denied-capability behavior (today: `-1` for reads, silent no-op for writes, trap on scope errors) before freezing ABI v1
+- [x] Package format: allow `manifest.plugin.entry` and `src/**` script files (unpack currently only accepts `plugin.wasm`)
+- [x] Roll back plugin dir + DB row when load fails after install — tested in tests/lifecycle.rs (forced insert failure after the package moved: an upgrade restores the old package, a fresh install leaves nothing)
+- [x] Wall-clock timeout for plugin calls (checked at every host call; pure guest loops are bounded by fuel only, see docs/PLUGINS.md)
 
 ### B. JS script runtime (Boa)
-- [ ] Add Boa dependency (pinned); verify license and tree with `cargo deny`
-- [ ] Script contract: `handle(req) -> {status, content_type, body}`; only global is `tpt` (log, db, kv, storage) backed by `HostServices`
-- [ ] Lock down the engine: no `eval`/`Function`, imports, fs, net or timers
-- [ ] Map `[limits]` to the engine: memory cap, instruction budget, wall-clock deadline
-- [ ] Compile once at load and cache; fresh context per request
-- [ ] Ship `tpt.d.ts` typings for editor autocomplete (TypeScript is author-side transpile only)
-- [ ] Script sandbox tests (infinite loop, memory bomb, denied caps, scope violations, forbidden globals)
-- [ ] Conformance test: same fixture plugin as wasm and JS gives identical responses
+- [x] Add Boa dependency (pinned); verify license and tree with `cargo deny` — pinned `=0.21.1` behind the `js` feature; licenses/bans/sources pass; `paste` advisory (RUSTSEC-2024-0436, unmaintained proc-macro pulled only by Boa) is ignored in `deny.toml` with a reason; remove it when Boa drops `paste`. Release binary: 10.33 MiB without js, 18.31 MiB with.
+- [x] Script contract: `handle(req) -> {status, content_type, body}`; only global is `tpt` (log, db, kv, storage) backed by `HostServices`
+- [x] Lock down the engine: no `eval`/`Function`, imports, fs, net or timers
+- [x] Map `[limits]` to the engine: memory cap, instruction budget, wall-clock deadline (approximate: loop budget from max_fuel, recursion 256; no heap cap, bounded by source size and host caps)
+- [ ] Compile once at load and cache; fresh context per request — deviation: validated at load, re-parsed per call (Boa scripts are bound to their realm)
+- [x] Ship `tpt.d.ts` typings for editor autocomplete (TypeScript is author-side transpile only)
+- [x] Script sandbox tests (infinite loop, memory bomb, denied caps, scope violations, forbidden globals)
+- [x] Conformance test: same fixture plugin as wasm and JS gives identical responses
 
 ### C. Documented WASM ABI for other languages
-- [ ] `docs/PLUGIN_ABI.md`: exports, packed return and `-1`, JSON shapes, 4 MiB caps, re-entrant `tpt_alloc`, fuel semantics, denied/trap behavior, no WASI
-- [ ] Minimal WAT example in the docs
-- [ ] Starter templates for 1-2 other languages (e.g. AssemblyScript, TinyGo) with host conformance tests
+- [x] `docs/PLUGIN_ABI.md`: exports, packed return and `-1`, JSON shapes, 4 MiB caps, re-entrant `tpt_alloc`, fuel semantics, denied/trap behavior, no WASI
+- [x] Minimal WAT example in the docs — `docs/examples/minimal.wat`, compiled by a sandbox test
+- [x] Starter templates for 1-2 other languages (e.g. AssemblyScript, TinyGo) with host conformance tests — NOT DONE: no AssemblyScript or TinyGo toolchain installed to build or test them
 
 ### D. API tokens + external-process plugins
-- [ ] `api_tokens` table (hashed token, user, name, scopes, expiry, last used) + migration
-- [ ] Bearer-token middleware yielding the same `AuthUser` as the session resolver
-- [ ] `tpt-home token create|list|revoke`
-- [ ] `runtime = "external"`: register by manifest + scoped token; same capabilities and table-prefix rules; host-rendered UI unchanged
-- [ ] Python example external plugin (~30 lines)
+- [x] `api_tokens` table (hashed token, user, name, scopes, expiry, last used) + migration — migration `tpt-home-core:004_api_tokens`; hashed, scoped (`api` or `plugin:<id>`), expiring
+- [x] Bearer-token middleware yielding the same `AuthUser` as the session resolver — `auth_resolver` accepts `Authorization: Bearer` on `/api/` only, within scopes (403 out of scope)
+- [x] `tpt-home token create|list|revoke`
+- [x] `runtime = "external"`: register by manifest + scoped token; same capabilities and table-prefix rules; host-rendered UI unchanged — loopback URL entry, forwarded with timeout; host services at /api/plugin-host/<id>/<op> under plugin:<id> tokens
+- [x] Python example external plugin (~30 lines) — `docs/examples/external-python/` (53 lines incl. comments); verified end to end: forwarding, injection-safe writes, scope and permission denials, 502 when down
 - [ ] Optional (stretch): admin-approved local process supervision from the manifest
 
 ### E. MCP server (`tpt-home-mcp`)
-- [ ] Hand-rolled JSON-RPC 2.0 (`initialize`, `tools/list`, `tools/call`); only add an MCP crate if `cargo deny` clears it
-- [ ] Streamable HTTP transport at `POST /api/mcp` (bearer auth, rate limit)
-- [ ] Stdio transport: `tpt-home mcp --token ...`
-- [ ] Add `description` + `schema` to `RouteEntry` (macro args; default description from the doc comment)
-- [ ] Derive tools from enabled blueprint routes and plugin manifests (`[[tables]]`, form actions) + generic `plugin_call`
-- [ ] Execute tool calls through the in-process router with role enforcement (`Role::allows`) and rate limiting; never expose public routes
-- [ ] `docs/AI_PLUGIN_GUIDE.md` so an AI agent can write sandboxed JS plugins
-- [ ] Optional: admin-only `plugin_install` MCP tool with a human approval step
-- [ ] MCP tests: scripted JSON-RPC sessions over stdio and HTTP; non-admin token cannot call admin tools
+- [x] Hand-rolled JSON-RPC 2.0 (`initialize`, `tools/list`, `tools/call`); only add an MCP crate if `cargo deny` clears it — no MCP crate added
+- [x] Streamable HTTP transport at `POST /api/mcp` (bearer auth, rate limit) — request/response JSON only (no SSE streaming); the server's global rate limit applies
+- [x] Stdio transport: `tpt-home mcp --token ...` — logs now go to stderr so stdout carries only protocol lines
+- [ ] Add `description` + `schema` to `RouteEntry` (macro args; default description from the doc comment) — NOT DONE: tools are derived from plugin manifests, so route metadata is not needed yet
+- [ ] Derive tools from enabled blueprint routes and plugin manifests (`[[tables]]`, form actions) + generic `plugin_call` — PARTIAL: plugin tools only (plugins_list, plugin_call, form actions); blueprint routes are not exposed
+- [ ] Execute tool calls through the in-process router with role enforcement (`Role::allows`) and rate limiting; never expose public routes — PARTIAL: calls go through invoke_plugin, not the router; auth, token scope and plugin permissions apply; rate limiting is the HTTP server's global limit, not per tool; stdio is not rate limited
+- [x] `docs/AI_PLUGIN_GUIDE.md` so an AI agent can write sandboxed JS plugins
+- [ ] Optional: admin-only `plugin_install` MCP tool with a human approval step — NOT DONE (optional)
+- [ ] MCP tests: scripted JSON-RPC sessions over stdio and HTTP; non-admin token cannot call admin tools — PARTIAL: 9 in-process protocol and authorization tests, plus manual live runs of stdio and HTTP; no automated transport test
 
 ### F. Housekeeping
 - [ ] Update `docs/PLUGINS.md` for the new runtimes, tokens and MCP

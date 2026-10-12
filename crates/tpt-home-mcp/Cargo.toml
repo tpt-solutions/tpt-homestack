@@ -1,0 +1,26 @@
+[package]
+name = "tpt-home-mcp"
+description = "MCP server for tpt-homestack: JSON-RPC tools over HTTP (POST /api/mcp) and stdio, exposing enabled plugins to AI agents"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+
+[dependencies]
+tpt-home-core = { workspace = true }
+tpt-home-plugins = { path = "../tpt-home-plugins", version = "0.1.0" }
+axum = { workspace = true }
+tokio = { workspace = true, features = ["io-std", "io-util"] }
+serde = { workspace = true }
+serde_json = { workspace = true }
+anyhow = { workspace = true }
+http-body-util = "0.1"
+inventory = { workspace = true }
+tracing = { workspace = true }
+
+[dev-dependencies]
+tempfile = "3"
+toml = { workspace = true }
+wasmi = { workspace = true }

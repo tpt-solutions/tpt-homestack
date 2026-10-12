@@ -4,6 +4,7 @@
 //! Authentication: Argon2id password hashing, users/roles and DB-backed
 //! sessions.
 
+pub mod api_token;
 pub mod password;
 pub mod session;
 pub mod user;
@@ -19,6 +20,8 @@ pub enum AuthError {
     WeakPassword(String),
     #[error("{0}")]
     InvalidUsername(String),
+    #[error("{0}")]
+    Invalid(String),
     #[error("{0}")]
     NotFound(String),
     #[error("session expired")]
@@ -37,7 +40,9 @@ impl From<AuthError> for ApiError {
     fn from(e: AuthError) -> Self {
         match e {
             AuthError::InvalidCredentials | AuthError::SessionExpired => ApiError::Unauthorized,
-            AuthError::WeakPassword(m) | AuthError::InvalidUsername(m) => ApiError::BadRequest(m),
+            AuthError::WeakPassword(m) | AuthError::InvalidUsername(m) | AuthError::Invalid(m) => {
+                ApiError::BadRequest(m)
+            }
             AuthError::NotFound(m) => ApiError::NotFound(m),
             AuthError::Internal(e) => ApiError::Internal(e),
         }

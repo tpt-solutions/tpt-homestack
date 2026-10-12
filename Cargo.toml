@@ -9,6 +9,7 @@ members = [
     "crates/tpt-home-cli",
     "crates/tpt-home-plugins",
     "crates/tpt-home-plugin-sdk",
+    "crates/tpt-home-mcp",
     "plugins/tpt-home-bp-calendar",
     "blueprints/tpt-home-bp-notes",
     "blueprints/tpt-home-bp-drop",

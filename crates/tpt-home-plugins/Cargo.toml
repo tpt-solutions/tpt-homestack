@@ -25,10 +25,19 @@ sha2 = { workspace = true }
 uuid = { workspace = true }
 inventory = { workspace = true }
 wasmi = { workspace = true }
+# Pinned JS engine for the optional `js` tier. Upgrades are deliberate.
+boa_engine = { version = "=0.21.1", optional = true, default-features = false }
+# Same pin as boa_engine; the derive macros expand to paths under boa_gc.
+boa_gc = { version = "=0.21.1", optional = true }
 tar = { workspace = true }
+http-body-util = "0.1"
+hyper-util = { version = "0.1", features = ["client-legacy", "http1", "tokio"] }
 
 [dev-dependencies]
 tempfile = "3"
 tower = { workspace = true }
-http-body-util = "0.1"
 tpt-home-api = { workspace = true }
+
+[features]
+# JS script runtime (Boa). Off by default in this crate; the CLI enables it.
+js = ["dep:boa_engine", "dep:boa_gc"]

@@ -459,3 +459,124 @@ async fn login_page_renders() {
     assert!(html.contains("Sign in"));
     assert!(html.contains("tpt_session") || html.contains("doLogin"));
 }
+
+/// Router over a database we seed ourselves, so tests can mint API tokens.
+async fn router_with_user() -> (axum::Router, DbPool, i64) {
+    tpt_home_core::config::set_global_for_tests(test_config().clone());
+    let db: DbPool = connect_in_memory().await.unwrap();
+    tpt_home_core::migrate::run_all(&db).await.unwrap();
+    let user = tpt_home_core::auth::user::create_user(
+        &db,
+        "alice",
+        "correct horse battery",
+        tpt_home_core::auth::user::Role::User,
+    )
+    .await
+    .unwrap();
+    let router = build_router(db.clone(), test_config());
+    (router, db, user.id)
+}
+
+fn bearer_get(uri: &str, token: &str) -> Request<Body> {
+    Request::builder()
+        .method("GET")
+        .uri(uri)
+        .header("authorization", format!("Bearer {token}"))
+        .body(Body::empty())
+        .unwrap()
+}
+
+#[tokio::test]
+async fn bearer_token_authenticates_api_calls() {
+    let (router, db, uid) = router_with_user().await;
+    let (_, token) = tpt_home_core::auth::api_token::create_api_token(
+        &db,
+        uid,
+        "scripts",
+        &["api".to_string()],
+        None,
+    )
+    .await
+    .unwrap();
+
+    let res = router
+        .clone()
+        .oneshot(bearer_get("/api/auth/me", &token))
+        .await
+        .unwrap();
+    assert_eq!(res.status(), StatusCode::OK);
+    let me = body_json(res).await;
+    assert_eq!(me["username"], "alice");
+
+    let bogus = router
+        .oneshot(bearer_get("/api/auth/me", "tpt_bogus"))
+        .await
+        .unwrap();
+    assert_eq!(bogus.status(), StatusCode::UNAUTHORIZED);
+}
+
+#[tokio::test]
+async fn plugin_scoped_token_is_limited_to_its_plugin() {
+    let (router, db, uid) = router_with_user().await;
+    let (_, token) = tpt_home_core::auth::api_token::create_api_token(
+        &db,
+        uid,
+        "calendar process",
+        &["plugin:calendar".to_string()],
+        None,
+    )
+    .await
+    .unwrap();
+
+    // Outside the plugin scope: forbidden, not unauthenticated.
+    let res = router
+        .clone()
+        .oneshot(bearer_get("/api/auth/me", &token))
+        .await
+        .unwrap();
+    assert_eq!(res.status(), StatusCode::FORBIDDEN);
+
+    // Pages are never reachable with a bearer token.
+    let page = router
+        .oneshot(bearer_get("/dashboard", &token))
+        .await
+        .unwrap();
+    assert_ne!(page.status(), StatusCode::OK);
+}
+
+#[tokio::test]
+async fn cookie_sessions_still_work_alongside_tokens() {
+    let (router, _db, _) = router_with_user().await;
+    let res = router
+        .clone()
+        .oneshot(json_request(
+            "POST",
+            "/api/auth/login",
+            json!({"username": "alice", "password": "correct horse battery"}),
+            None,
+        ))
+        .await
+        .unwrap();
+    assert_eq!(res.status(), StatusCode::OK);
+    let cookie = res
+        .headers()
+        .get("set-cookie")
+        .unwrap()
+        .to_str()
+        .unwrap()
+        .split(';')
+        .next()
+        .unwrap()
+        .to_string();
+    let me = router
+        .oneshot(
+            Request::builder()
+                .uri("/api/auth/me")
+                .header("cookie", cookie)
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(me.status(), StatusCode::OK);
+}

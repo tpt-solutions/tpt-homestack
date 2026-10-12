@@ -16,10 +16,22 @@ use wasmi::Module;
 
 use crate::manifest::{Permissions, PluginManifest};
 
-/// One loaded plugin: manifest, compiled module and package directory.
+/// Execution backend for a loaded plugin. Only wasm exists so far; the JS
+/// and external tiers add variants here.
+#[derive(Clone)]
+pub enum Backend {
+    Wasm(Module),
+    /// A validated JS script (`runtime = "js"`), built with the `js` feature.
+    #[cfg(feature = "js")]
+    Script(std::sync::Arc<crate::script::ScriptSource>),
+    /// An out-of-process plugin: requests are forwarded to this loopback base URL.
+    External(String),
+}
+
+/// One loaded plugin: manifest, compiled backend and package directory.
 pub struct LoadedPlugin {
     pub manifest: PluginManifest,
-    pub module: Module,
+    pub backend: Backend,
     /// Directory containing `plugin.toml` + the wasm entry.
     pub dir: PathBuf,
     /// Admin-approved capabilities from `plugins.approved_permissions`.

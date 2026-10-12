@@ -33,6 +33,13 @@ skip = []
 [advisories]
 version = 2
 yanked = "deny"
+ignore = [
+    # `paste` is unmaintained, not vulnerable. It is a proc-macro, so it runs
+    # only at compile time and its code is not shipped. The only path into
+    # the graph is `boa_engine` (the optional `js` feature, pinned to 0.21.1).
+    # Remove this entry when Boa drops `paste` or the advisory is resolved.
+    { id = "RUSTSEC-2024-0436", reason = "unmaintained proc-macro pulled only by the optional Boa JS engine" },
+]
 
 [sources]
 unknown-registry = "deny"

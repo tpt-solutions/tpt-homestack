@@ -10,12 +10,17 @@
 //! enable/disable without a restart. See `docs/PLUGINS.md`.
 
 pub mod dispatch;
+pub mod external;
+pub mod host;
+pub mod host_api;
 pub mod lifecycle;
 pub mod manifest;
 pub mod package;
 pub mod registry;
 pub mod runtime;
 pub mod scope;
+#[cfg(feature = "js")]
+pub mod script;
 
 /// Link anchor for the binary: see `tpt-home-cli`'s `BLUEPRINT_LINK_ANCHORS`.
 /// Never called at runtime; its address keeps the plugin host's startup and
@@ -59,6 +64,24 @@ inventory::submit! {
             router.route(
                 "/plugins/{plugin_id}/{*rest}",
                 axum::routing::get(dispatch::page),
+            )
+        },
+    }
+}
+
+// Host services for external plugin processes: `/api/plugin-host/<id>/<op>`.
+// Static `plugin-host` outranks the `{plugin_id}` catch-all, and plugin ids
+// cannot contain '-', so the two never collide.
+inventory::submit! {
+    tpt_home_core::RouteEntry {
+        blueprint: "tpt-home-plugins",
+        method: "POST",
+        path: "/api/plugin-host/{plugin_id}/{*rest}",
+        role: None,
+        register: |router| {
+            router.route(
+                "/api/plugin-host/{plugin_id}/{*rest}",
+                axum::routing::post(host_api::plugin_host),
             )
         },
     }

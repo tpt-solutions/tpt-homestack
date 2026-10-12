@@ -37,9 +37,11 @@ pub fn init_tracing(cfg: &Config) {
         .clone()
         .or_else(|| std::env::var("RUST_LOG").ok())
         .unwrap_or_else(|| "info".to_string());
+    // Logs go to stderr so that stdio protocols (the `mcp` command) keep stdout clean.
     let _ = tracing_subscriber::fmt()
         .with_env_filter(tracing_subscriber::EnvFilter::new(filter))
         .with_target(false)
+        .with_writer(std::io::stderr)
         .try_init();
 }
 

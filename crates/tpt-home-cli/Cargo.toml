@@ -19,6 +19,7 @@ tpt-home-bp-notes = { path = "../../blueprints/tpt-home-bp-notes", version = "0.
 tpt-home-bp-drop = { path = "../../blueprints/tpt-home-bp-drop", version = "0.1.0" }
 tpt-home-bp-track = { path = "../../blueprints/tpt-home-bp-track", version = "0.1.0" }
 tpt-home-plugins = { path = "../tpt-home-plugins", version = "0.1.0" }
+tpt-home-mcp = { path = "../tpt-home-mcp", version = "0.1.0" }
 clap = { workspace = true }
 clap_complete = { workspace = true }
 tokio = { workspace = true }
@@ -27,6 +28,11 @@ serde_json = { workspace = true }
 anyhow = { workspace = true }
 tracing = { workspace = true }
 uuid = { workspace = true }
+
+[features]
+default = ["js"]
+# JS script plugins (Boa). Disable with --no-default-features for a smaller build.
+js = ["tpt-home-plugins/js"]
 
 [dev-dependencies]
 tempfile = "3"

@@ -28,10 +28,26 @@ pub struct PluginMeta {
     pub api_version: u32,
     /// Wasm file name inside the package (e.g. `plugin.wasm`).
     pub entry: String,
+    /// Execution tier. Unknown values fail to parse.
+    #[serde(default)]
+    pub runtime: Runtime,
 }
 
 fn default_api_version() -> u32 {
     SUPPORTED_API_VERSION
+}
+
+/// Plugin execution tier, shared by the manifest and the dispatcher.
+#[derive(Debug, Clone, Copy, Default, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "lowercase")]
+pub enum Runtime {
+    /// Sandboxed WebAssembly on wasmi (the only tier implemented so far).
+    #[default]
+    Wasm,
+    /// JS scripts on Boa, compiled in with the `js` feature.
+    Js,
+    /// External process over a scoped API token (Phase 4b-D, not implemented yet).
+    External,
 }
 
 /// `[permissions]` section. Everything defaults to *denied*; the admin sees
@@ -48,6 +64,21 @@ pub struct Permissions {
 }
 
 impl Permissions {
+    /// Parse an approval list such as `db,kv`. Empty input grants nothing; an
+    /// unknown name is an error, so a typo cannot silently approve less.
+    pub fn parse_list(text: &str) -> Result<Self, String> {
+        let mut granted = Self::default();
+        for name in text.split(',').map(str::trim).filter(|n| !n.is_empty()) {
+            match name {
+                "db" => granted.db = true,
+                "kv" => granted.kv = true,
+                "storage" => granted.storage = true,
+                other => return Err(format!("unknown permission '{other}'")),
+            }
+        }
+        Ok(granted)
+    }
+
     /// Serialize as a sorted JSON array for the `plugins.approved_permissions`
     /// column.
     pub fn to_json(&self) -> String {
@@ -95,6 +126,9 @@ pub struct Limits {
     pub max_fuel: u64,
     /// Linear memory cap in MiB per instance.
     pub max_memory_mb: u64,
+    /// Wall-clock budget per invocation in milliseconds, checked at every
+    /// host call (see `runtime` for why pure guest compute is fuel-bounded).
+    pub max_millis: u64,
 }
 
 impl Default for Limits {
@@ -102,6 +136,7 @@ impl Default for Limits {
         Self {
             max_fuel: 50_000_000,
             max_memory_mb: 16,
+            max_millis: 5_000,
         }
     }
 }
@@ -145,6 +180,19 @@ pub struct PageDef {
     /// `form` pages: API path that receives the POST (below `/api/<id>`).
     #[serde(default)]
     pub action: Option<String>,
+    /// `table` pages: a `detail` page path. Rows link to it as `?id=<row>`.
+    #[serde(default)]
+    pub link: Option<String>,
+}
+
+/// A forward-only schema migration (`[[migrations]]`). Applied once per
+/// plugin, in version order, inside the install transaction.
+#[derive(Debug, Clone, Deserialize, PartialEq)]
+pub struct MigrationDef {
+    /// Positive, strictly increasing across the manifest.
+    pub version: u32,
+    /// One SQL statement each. Each must touch only `<id>_*` tables.
+    pub statements: Vec<String>,
 }
 
 /// Parsed `plugin.toml`.
@@ -159,6 +207,8 @@ pub struct PluginManifest {
     pub tables: Vec<TableDef>,
     #[serde(default)]
     pub pages: Vec<PageDef>,
+    #[serde(default)]
+    pub migrations: Vec<MigrationDef>,
 }
 
 /// Parse and validate a manifest from TOML text.
@@ -196,14 +246,25 @@ fn validate(m: &PluginManifest) -> Result<(), anyhow::Error> {
             SUPPORTED_API_VERSION
         );
     }
-    if m.plugin.entry.is_empty()
-        || !m
-            .plugin
-            .entry
-            .chars()
-            .all(|c| c.is_ascii_alphanumeric() || matches!(c, '.' | '_' | '-'))
-    {
-        anyhow::bail!("entry must be a plain file name like 'plugin.wasm'");
+    match m.plugin.runtime {
+        Runtime::Wasm => {}
+        Runtime::Js if cfg!(feature = "js") => {}
+        Runtime::Js => anyhow::bail!("runtime 'js' needs a build with the 'js' feature"),
+        Runtime::External => {}
+    }
+    match m.plugin.runtime {
+        Runtime::External => validate_external_entry(&m.plugin.entry)?,
+        _ => {
+            if m.plugin.entry.is_empty()
+                || !m
+                    .plugin
+                    .entry
+                    .chars()
+                    .all(|c| c.is_ascii_alphanumeric() || matches!(c, '.' | '_' | '-'))
+            {
+                anyhow::bail!("entry must be a plain file name like 'plugin.wasm'");
+            }
+        }
     }
 
     for table in &m.tables {
@@ -231,27 +292,105 @@ fn validate(m: &PluginManifest) -> Result<(), anyhow::Error> {
         if !page.path.starts_with('/') || page.path.contains("..") || page.path.contains('?') {
             anyhow::bail!("page path '{}' must start with '/' and be plain", page.path);
         }
+        for column in page.columns.iter().chain(page.fields.iter()) {
+            valid_component(column, "column or field name")?;
+        }
         match page.kind.as_str() {
-            "table" => {
+            "table" | "list" | "detail" => {
                 let Some(table) = &page.table else {
-                    anyhow::bail!("table page '{}' needs `table`", page.path);
+                    anyhow::bail!("{} page '{}' needs `table`", page.kind, page.path);
                 };
                 valid_component(table, "table name")?;
-            }
-            "form" => {
-                if page.action.is_none() {
-                    anyhow::bail!("form page '{}' needs `action`", page.path);
+                if page.kind == "list" && page.columns.is_empty() {
+                    anyhow::bail!(
+                        "list page '{}' needs `columns` (the first is its title)",
+                        page.path
+                    );
                 }
             }
-            other => anyhow::bail!("page '{}' kind '{other}' must be table|form", page.path),
+            "form" => {
+                let Some(action) = &page.action else {
+                    anyhow::bail!("form page '{}' needs `action`", page.path);
+                };
+                if !action
+                    .chars()
+                    .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '_' || c == '/')
+                    || action.contains("..")
+                {
+                    anyhow::bail!("form action '{action}' must be a plain path");
+                }
+            }
+            other => anyhow::bail!(
+                "page '{}' kind '{other}' must be table|form|list|detail",
+                page.path
+            ),
+        }
+        if let Some(link) = &page.link {
+            if page.kind != "table" {
+                anyhow::bail!("only table pages can link to a detail page");
+            }
+            if !link.starts_with('/') || link.contains("..") || link.contains('?') {
+                anyhow::bail!("link '{link}' must be a plain page path");
+            }
         }
     }
 
     if m.limits.max_memory_mb == 0 || m.limits.max_memory_mb > 256 {
         anyhow::bail!("limits.max_memory_mb must be 1-256");
     }
+    validate_migrations(m)?;
     if m.limits.max_fuel < 1000 {
         anyhow::bail!("limits.max_fuel must be at least 1000");
+    }
+    if !(1..=60_000).contains(&m.limits.max_millis) {
+        anyhow::bail!("limits.max_millis must be 1-60000");
+    }
+    Ok(())
+}
+
+/// Migrations are forward-only: versions must be positive and strictly
+/// increasing, each statement must pass the plugin SQL scope, and the set is
+/// capped so a manifest cannot describe unbounded work.
+fn validate_migrations(m: &PluginManifest) -> Result<(), anyhow::Error> {
+    if m.migrations.len() > 100 {
+        anyhow::bail!("at most 100 migrations per plugin");
+    }
+    let mut previous = 0u32;
+    for migration in &m.migrations {
+        if migration.version == 0 || migration.version <= previous {
+            anyhow::bail!("migration versions must be positive and strictly increasing");
+        }
+        previous = migration.version;
+        if migration.statements.is_empty() {
+            anyhow::bail!("migration {} has no statements", migration.version);
+        }
+        for statement in &migration.statements {
+            crate::scope::validate_scoped_sql(&m.plugin.id, statement)
+                .map_err(|e| anyhow::anyhow!("migration {}: {e}", migration.version))?;
+        }
+    }
+    Ok(())
+}
+
+/// An external plugin's `entry` is the base URL of its process. It must be
+/// plain `http://` on loopback, with no path, so that a manifest cannot point
+/// the host at arbitrary network hosts.
+pub fn validate_external_entry(entry: &str) -> Result<(), anyhow::Error> {
+    let uri: axum::http::Uri = entry
+        .parse()
+        .map_err(|e| anyhow::anyhow!("external entry is not a URL: {e}"))?;
+    if uri.scheme_str() != Some("http") {
+        anyhow::bail!("external entry must use http://");
+    }
+    let host = uri.host().unwrap_or("");
+    if !matches!(host, "127.0.0.1" | "localhost" | "[::1]" | "::1") {
+        anyhow::bail!("external entry must be a loopback address (127.0.0.1, localhost or ::1)");
+    }
+    if uri.port_u16().is_none() {
+        anyhow::bail!("external entry must name a port");
+    }
+    if !matches!(uri.path(), "" | "/") || uri.query().is_some() {
+        anyhow::bail!("external entry must be a bare base URL with no path or query");
     }
     Ok(())
 }
@@ -314,6 +453,62 @@ mod tests {
     }
 
     #[test]
+    fn migrations_must_be_ordered_scoped_and_non_empty() {
+        let good = format!(
+            "{SAMPLE}
+[[migrations]]
+version = 1
+statements = [\"ALTER TABLE calendar_events ADD COLUMN note TEXT\"]
+"
+        );
+        assert_eq!(parse(&good).unwrap().migrations.len(), 1);
+
+        let out_of_scope = good.replace("calendar_events ADD", "users ADD");
+        assert!(
+            parse(&out_of_scope).is_err(),
+            "migration must stay in the plugin's tables"
+        );
+
+        let unordered = format!(
+            "{good}
+[[migrations]]
+version = 1
+statements = [\"ALTER TABLE calendar_events ADD COLUMN x TEXT\"]
+"
+        );
+        assert!(
+            parse(&unordered).is_err(),
+            "versions must strictly increase"
+        );
+
+        let empty = format!(
+            "{SAMPLE}
+[[migrations]]
+version = 1
+statements = []
+"
+        );
+        assert!(parse(&empty).is_err());
+    }
+
+    #[test]
+    fn approval_lists_parse_strictly() {
+        assert_eq!(Permissions::parse_list("").unwrap(), Permissions::default());
+        assert_eq!(
+            Permissions::parse_list("db, kv").unwrap(),
+            Permissions {
+                db: true,
+                kv: true,
+                storage: false
+            }
+        );
+        assert!(
+            Permissions::parse_list("db,admin").is_err(),
+            "typo must not approve less silently"
+        );
+    }
+
+    #[test]
     fn approved_permissions_round_trip_and_fail_closed() {
         let all = Permissions {
             db: true,
@@ -363,6 +558,116 @@ mod tests {
             "api_version = 99\n        entry = \"plugin.wasm\"",
         );
         assert!(parse(&bad_api).is_err());
+    }
+
+    #[test]
+    fn runtime_defaults_to_wasm_and_rejects_unknown_values() {
+        assert_eq!(parse(SAMPLE).unwrap().plugin.runtime, Runtime::Wasm);
+
+        let unknown = SAMPLE.replace(
+            "entry = \"plugin.wasm\"",
+            "entry = \"plugin.wasm\"
+        runtime = \"python\"",
+        );
+        assert!(parse(&unknown).is_err());
+
+        // `js` parses, but only builds compiled with the `js` feature accept it.
+        let js = SAMPLE.replace(
+            "entry = \"plugin.wasm\"",
+            "entry = \"plugin.wasm\"
+        runtime = \"js\"",
+        );
+        assert_eq!(parse(&js).is_ok(), cfg!(feature = "js"));
+        // `external` takes a loopback URL as its entry, not a file name.
+        let external = SAMPLE.replace(
+            "entry = \"plugin.wasm\"",
+            "entry = \"plugin.wasm\"
+        runtime = \"external\"",
+        );
+        assert!(
+            parse(&external).is_err(),
+            "a file name is not an external entry"
+        );
+        let external_ok = external.replace(
+            "entry = \"plugin.wasm\"",
+            "entry = \"http://127.0.0.1:8790\"",
+        );
+        assert!(parse(&external_ok).is_ok());
+    }
+
+    #[test]
+    fn page_kinds_and_names_are_validated() {
+        let page = |body: &str| {
+            format!(
+                "{SAMPLE}
+[[pages]]
+{body}
+"
+            )
+        };
+        assert!(
+            parse(&page(
+                "path = \"/list\"
+title = \"L\"
+kind = \"list\"
+table = \"events\"
+columns = [\"title\"]"
+            ))
+            .is_ok()
+        );
+        assert!(
+            parse(&page(
+                "path = \"/list\"
+title = \"L\"
+kind = \"list\"
+table = \"events\""
+            ))
+            .is_err(),
+            "list needs columns"
+        );
+        assert!(
+            parse(&page(
+                "path = \"/d\"
+title = \"D\"
+kind = \"detail\""
+            ))
+            .is_err(),
+            "detail needs table"
+        );
+        assert!(
+            parse(&page(
+                "path = \"/x\"
+title = \"X\"
+kind = \"list\"
+table = \"events\"
+columns = [\"a'); alert(1);//\"]"
+            ))
+            .is_err(),
+            "quotes in names"
+        );
+        assert!(
+            parse(&page(
+                "path = \"/f\"
+title = \"F\"
+kind = \"form\"
+fields = [\"title\"]
+action = \"x'y\""
+            ))
+            .is_err(),
+            "action must be a plain path"
+        );
+        assert!(
+            parse(&page(
+                "path = \"/f\"
+title = \"F\"
+kind = \"form\"
+fields = [\"title\"]
+action = \"add\"
+link = \"/d\""
+            ))
+            .is_err(),
+            "only tables link"
+        );
     }
 
     #[test]
