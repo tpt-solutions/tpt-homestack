@@ -91,7 +91,7 @@ Key decisions
 - [ ] Optional signature verification
 - [x] Plugin SDK crate (`tpt-home-plugin-sdk`) with a macro-style authoring experience for Rust plugins
 - [ ] Plugin template and example plugin (`tpt-home-bp-calendar`)
-- [ ] Hot load/unload without a server restart
+- [x] Hot load/unload without a server restart — install, enable, disable and uninstall change the registry at once; verified live and in tests/lifecycle.rs
 - [x] Plugin isolation and failure handling (a crashing plugin must not take down the host) — a trapping guest fails only its own call (sandbox test); the next call runs
 - [ ] Plugin tests and fuzzing of the host boundary
 
