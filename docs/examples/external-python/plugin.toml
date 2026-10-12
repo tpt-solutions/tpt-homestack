@@ -1,0 +1,25 @@
+# Example external plugin: a process you run yourself, written in Python.
+# The host forwards /api/ticker/... to entry, and the process stores its data
+# through /api/plugin-host/ticker/... using a token scoped to plugin:ticker.
+[plugin]
+id = "ticker"
+name = "Ticker"
+version = "0.1.0"
+runtime = "external"
+entry = "http://127.0.0.1:8790"
+
+[permissions]
+db = true
+
+[[tables]]
+name = "items"
+[[tables.columns]]
+name = "label"
+kind = "text"
+
+[[pages]]
+path = "/items"
+title = "Items"
+kind = "table"
+table = "items"
+columns = ["label"]

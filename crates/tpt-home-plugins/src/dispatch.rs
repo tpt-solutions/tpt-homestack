@@ -20,11 +20,11 @@ use crate::lifecycle;
 use crate::registry::Backend;
 use crate::runtime::{self, PluginRequest};
 
-fn db_path() -> std::path::PathBuf {
+pub(crate) fn db_path() -> std::path::PathBuf {
     tpt_home_core::config::global().db_path()
 }
 
-fn storage_dir(id: &str) -> std::path::PathBuf {
+pub(crate) fn storage_dir(id: &str) -> std::path::PathBuf {
     tpt_home_core::config::global()
         .data_dir
         .join("plugins")
@@ -53,15 +53,29 @@ pub async fn api_invoke(
         .map(|(k, v)| format!("{k}={v}"))
         .collect::<Vec<_>>()
         .join("&");
+    let body = (!body.is_empty()).then(|| String::from_utf8_lossy(&body).into_owned());
+    if let Backend::External(base) = &plugin.backend {
+        let timeout = std::time::Duration::from_millis(plugin.manifest.limits.max_millis);
+        return Ok(crate::external::forward(
+            base,
+            method.as_str(),
+            &format!("/{rest}"),
+            &query_string,
+            body,
+            timeout,
+        )
+        .await);
+    }
     let request = PluginRequest {
         method: method.as_str().to_string(),
         path: format!("/{rest}"),
         query: query_string,
-        body: (!body.is_empty()).then(|| String::from_utf8_lossy(&body).into_owned()),
+        body,
     };
 
     let granted = plugin.effective_permissions();
     let result = tokio::task::spawn_blocking(move || match &plugin.backend {
+        Backend::External(_) => Err(anyhow::anyhow!("external plugins are forwarded, not run")),
         Backend::Wasm(module) => runtime::call_plugin(
             module,
             &plugin.manifest,
@@ -190,7 +204,7 @@ pub async fn list_plugins(State(db): State<DbPool>) -> Result<impl IntoResponse,
 }
 
 /// POST /api/plugins/install — multipart field `package` (a `.tptp`).
-/// Optional `enable=true` enables immediately; permissions are approved as
+/// Optional `enable` form field (`true`) enables immediately; permissions are approved as
 /// declared in the manifest (the admin chose to install it).
 #[tpt_home_macros::bp_route(post, "/api/plugins/install", role = "admin")]
 pub async fn install_plugin(

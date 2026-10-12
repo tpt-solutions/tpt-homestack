@@ -39,7 +39,7 @@ cargo build --release --target wasm32-unknown-unknown
 
 | Section | Purpose |
 |---|---|
-| `[plugin]` | `id` (lowercase, digits, underscore; namespaces routes and tables), `name`, `version`, `entry` (wasm file in the package), `api_version` (must be `1`), `runtime` (`wasm` is the only tier implemented; `js` and `external` are reserved) |
+| `[plugin]` | `id` (lowercase, digits, underscore; namespaces routes and tables), `name`, `version`, `entry` (wasm or script file in the package, or the base URL for `external`), `api_version` (must be `1`), `runtime` (`wasm`, `js` with the `js` feature, or `external`) |
 | `[permissions]` | `db`, `kv`, `storage` — all default to denied. A capability is granted only when the manifest requests it **and** the admin approved it (`plugins.approved_permissions`). |
 | `[limits]` | `max_fuel` (instruction budget per call), `max_memory_mb`, `max_millis` (wall-clock budget per call, default 5000, checked at every host call) |
 | `[[tables]]` | Tables created as `<id>_<name>` at install; column kinds `text`, `integer`, `real`, `bool` |
@@ -49,6 +49,50 @@ The example in [`plugins/tpt-home-bp-calendar/plugin.toml`](../plugins/tpt-home-
 
 For writing a wasm plugin in a language other than Rust, see the binary
 interface in [`PLUGIN_ABI.md`](PLUGIN_ABI.md).
+
+## External plugins (`runtime = "external"`)
+
+An external plugin is a process you run yourself, in any language. The
+manifest's `entry` is its base URL, which must be plain `http://` on loopback
+(`127.0.0.1`, `localhost` or `::1`) with a port and no path:
+
+```toml
+[plugin]
+id = "ticker"
+runtime = "external"
+entry = "http://127.0.0.1:8790"
+```
+
+- The host forwards `/api/ticker/…` to the process with the same method,
+  path, query and body, and returns its status and body. The plugin's
+  `max_millis` bounds each exchange. An unreachable process gives `502`, and
+  a slow one gives `504`.
+- The process reaches host services at `POST /api/plugin-host/ticker/<op>`,
+  with a bearer token whose scope is `plugin:ticker`. Operations are
+  `db/query`, `db/execute`, `kv/get`, `kv/set`, `kv/del`, `storage/read` and
+  `storage/write`. Each one goes through the same rules as the wasm imports:
+  approved permissions, table scoping, size caps and the deadline. Denied
+  calls return `403` with the reason.
+- The host still renders the plugin's pages from the manifest. Its tables are
+  created at install, as for other runtimes.
+
+Create the token and package the plugin:
+
+```sh
+tpt-home token create admin --name ticker-process --scope plugin:ticker
+tpt-home plugin build docs/examples/external-python        # writes ticker-0.1.0.tptp
+# Install through the admin API (the CLI install command is not implemented yet):
+curl -H "Authorization: Bearer $ADMIN_TOKEN" -F package=@ticker-0.1.0.tptp      http://127.0.0.1:8080/api/plugins/install
+curl -X POST -H "Content-Type: application/json" -H "Authorization: Bearer $ADMIN_TOKEN"      -d '{}' http://127.0.0.1:8080/api/plugins/ticker/enable
+```
+
+A working example is in [`examples/external-python/`](examples/external-python/).
+It is a single Python file using only the standard library. It stores labels
+in its own table and is covered by an end-to-end run.
+
+Tokens are issued by `tpt-home token`, not by plugins. A token can reach only
+the routes its scope names, and it is refused with `403` anywhere else. See
+the API token section of the docs.
 
 ## JS script plugins (`runtime = "js"`)
 

@@ -24,6 +24,8 @@ pub enum Backend {
     /// A validated JS script (`runtime = "js"`), built with the `js` feature.
     #[cfg(feature = "js")]
     Script(std::sync::Arc<crate::script::ScriptSource>),
+    /// An out-of-process plugin: requests are forwarded to this loopback base URL.
+    External(String),
 }
 
 /// One loaded plugin: manifest, compiled backend and package directory.

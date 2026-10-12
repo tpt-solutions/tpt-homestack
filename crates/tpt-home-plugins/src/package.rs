@@ -12,7 +12,7 @@ use std::collections::HashMap;
 
 use sha2::{Digest, Sha256};
 
-use crate::manifest;
+use crate::manifest::{self, Runtime};
 
 /// Paths that may appear in a package besides the manifest entry, which is
 /// checked against the parsed manifest: `plugin.toml`, the checksum file,
@@ -48,9 +48,11 @@ pub fn pack(dir: &std::path::Path) -> Result<Package, anyhow::Error> {
     let mut files: Vec<(String, Vec<u8>)> = Vec::new();
     files.push(("plugin.toml".into(), manifest_text.into_bytes()));
 
-    let entry_bytes = std::fs::read(dir.join(&manifest.plugin.entry))
-        .map_err(|e| anyhow::anyhow!("read {}: {e}", manifest.plugin.entry))?;
-    files.push((manifest.plugin.entry.clone(), entry_bytes));
+    if manifest.plugin.runtime != Runtime::External {
+        let entry_bytes = std::fs::read(dir.join(&manifest.plugin.entry))
+            .map_err(|e| anyhow::anyhow!("read {}: {e}", manifest.plugin.entry))?;
+        files.push((manifest.plugin.entry.clone(), entry_bytes));
+    }
 
     for tree in ["assets", "src"] {
         let root = dir.join(tree);
@@ -185,7 +187,9 @@ pub fn unpack_verify(
             checksums.keys().collect::<Vec<_>>()
         );
     }
-    if !entries.iter().any(|(p, _)| *p == manifest.plugin.entry) {
+    if manifest.plugin.runtime != Runtime::External
+        && !entries.iter().any(|(p, _)| *p == manifest.plugin.entry)
+    {
         anyhow::bail!("package is missing its entry {}", manifest.plugin.entry);
     }
     for (path, _) in &entries {

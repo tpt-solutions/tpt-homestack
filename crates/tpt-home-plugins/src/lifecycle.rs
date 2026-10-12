@@ -252,7 +252,9 @@ fn load_backend(dir: &Path, manifest: &PluginManifest) -> Result<registry::Backe
             Ok(registry::Backend::Wasm(module))
         }
         Runtime::Js => script_backend(dir, manifest),
-        Runtime::External => anyhow::bail!("runtime 'external' is not implemented yet"),
+        Runtime::External => Ok(registry::Backend::External(
+            manifest.plugin.entry.trim_end_matches('/').to_string(),
+        )),
     }
 }
 

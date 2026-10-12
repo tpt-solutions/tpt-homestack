@@ -128,8 +128,8 @@ Four tiers sharing one manifest + capability model: JS scripts (Boa), WASM (Rust
 - [x] `api_tokens` table (hashed token, user, name, scopes, expiry, last used) + migration — migration `tpt-home-core:004_api_tokens`; hashed, scoped (`api` or `plugin:<id>`), expiring
 - [x] Bearer-token middleware yielding the same `AuthUser` as the session resolver — `auth_resolver` accepts `Authorization: Bearer` on `/api/` only, within scopes (403 out of scope)
 - [x] `tpt-home token create|list|revoke`
-- [ ] `runtime = "external"`: register by manifest + scoped token; same capabilities and table-prefix rules; host-rendered UI unchanged
-- [ ] Python example external plugin (~30 lines)
+- [x] `runtime = "external"`: register by manifest + scoped token; same capabilities and table-prefix rules; host-rendered UI unchanged — loopback URL entry, forwarded with timeout; host services at /api/plugin-host/<id>/<op> under plugin:<id> tokens
+- [x] Python example external plugin (~30 lines) — `docs/examples/external-python/` (53 lines incl. comments); verified end to end: forwarding, injection-safe writes, scope and permission denials, 502 when down
 - [ ] Optional (stretch): admin-approved local process supervision from the manifest
 
 ### E. MCP server (`tpt-home-mcp`)

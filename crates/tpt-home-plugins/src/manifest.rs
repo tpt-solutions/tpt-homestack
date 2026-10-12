@@ -220,16 +220,21 @@ fn validate(m: &PluginManifest) -> Result<(), anyhow::Error> {
         Runtime::Wasm => {}
         Runtime::Js if cfg!(feature = "js") => {}
         Runtime::Js => anyhow::bail!("runtime 'js' needs a build with the 'js' feature"),
-        Runtime::External => anyhow::bail!("runtime 'external' is not implemented yet"),
+        Runtime::External => {}
     }
-    if m.plugin.entry.is_empty()
-        || !m
-            .plugin
-            .entry
-            .chars()
-            .all(|c| c.is_ascii_alphanumeric() || matches!(c, '.' | '_' | '-'))
-    {
-        anyhow::bail!("entry must be a plain file name like 'plugin.wasm'");
+    match m.plugin.runtime {
+        Runtime::External => validate_external_entry(&m.plugin.entry)?,
+        _ => {
+            if m.plugin.entry.is_empty()
+                || !m
+                    .plugin
+                    .entry
+                    .chars()
+                    .all(|c| c.is_ascii_alphanumeric() || matches!(c, '.' | '_' | '-'))
+            {
+                anyhow::bail!("entry must be a plain file name like 'plugin.wasm'");
+            }
+        }
     }
 
     for table in &m.tables {
@@ -281,6 +286,29 @@ fn validate(m: &PluginManifest) -> Result<(), anyhow::Error> {
     }
     if !(1..=60_000).contains(&m.limits.max_millis) {
         anyhow::bail!("limits.max_millis must be 1-60000");
+    }
+    Ok(())
+}
+
+/// An external plugin's `entry` is the base URL of its process. It must be
+/// plain `http://` on loopback, with no path, so that a manifest cannot point
+/// the host at arbitrary network hosts.
+pub fn validate_external_entry(entry: &str) -> Result<(), anyhow::Error> {
+    let uri: axum::http::Uri = entry
+        .parse()
+        .map_err(|e| anyhow::anyhow!("external entry is not a URL: {e}"))?;
+    if uri.scheme_str() != Some("http") {
+        anyhow::bail!("external entry must use http://");
+    }
+    let host = uri.host().unwrap_or("");
+    if !matches!(host, "127.0.0.1" | "localhost" | "[::1]" | "::1") {
+        anyhow::bail!("external entry must be a loopback address (127.0.0.1, localhost or ::1)");
+    }
+    if uri.port_u16().is_none() {
+        anyhow::bail!("external entry must name a port");
+    }
+    if !matches!(uri.path(), "" | "/") || uri.query().is_some() {
+        anyhow::bail!("external entry must be a bare base URL with no path or query");
     }
     Ok(())
 }
@@ -412,14 +440,21 @@ mod tests {
         runtime = \"js\"",
         );
         assert_eq!(parse(&js).is_ok(), cfg!(feature = "js"));
-        // `external` is recognised but not implemented yet.
+        // `external` takes a loopback URL as its entry, not a file name.
         let external = SAMPLE.replace(
             "entry = \"plugin.wasm\"",
             "entry = \"plugin.wasm\"
         runtime = \"external\"",
         );
-        let err = parse(&external).unwrap_err().to_string();
-        assert!(err.contains("not implemented"), "{err}");
+        assert!(
+            parse(&external).is_err(),
+            "a file name is not an external entry"
+        );
+        let external_ok = external.replace(
+            "entry = \"plugin.wasm\"",
+            "entry = \"http://127.0.0.1:8790\"",
+        );
+        assert!(parse(&external_ok).is_ok());
     }
 
     #[test]

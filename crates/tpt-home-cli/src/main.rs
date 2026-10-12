@@ -160,7 +160,17 @@ enum UserCmd {
 enum PluginCmd {
     /// List installed plugins (reads `<data_dir>/plugins`).
     List,
-    /// Install a `.tptp` package (Phase 4 — not yet implemented).
+    /// Pack a plugin directory (`plugin.toml` + entry + `assets/` + `src/`)
+    /// into a `.tptp` package.
+    Build {
+        /// Plugin source directory.
+        dir: std::path::PathBuf,
+        /// Output file (default `<id>-<version>.tptp` in the current directory).
+        #[arg(long)]
+        out: Option<std::path::PathBuf>,
+    },
+    /// Install a `.tptp` package. Not yet implemented here: install through
+    /// the admin API (`POST /api/plugins/install`).
     Install { path: std::path::PathBuf },
 }
 
@@ -233,8 +243,23 @@ async fn main() -> anyhow::Result<()> {
                 }
                 Ok(())
             }
+            PluginCmd::Build { dir, out } => {
+                let manifest = tpt_home_plugins::manifest::from_dir(&dir)?;
+                let package = tpt_home_plugins::package::pack(&dir)?;
+                let out = out.unwrap_or_else(|| {
+                    std::path::PathBuf::from(format!(
+                        "{}-{}.tptp",
+                        manifest.plugin.id, manifest.plugin.version
+                    ))
+                });
+                std::fs::write(&out, &package.bytes)?;
+                println!("wrote {} ({} bytes)", out.display(), package.bytes.len());
+                Ok(())
+            }
             PluginCmd::Install { .. } => {
-                anyhow::bail!("the WASM plugin system is Phase 4 — not implemented yet")
+                anyhow::bail!(
+                    "CLI install is not implemented yet; upload the package with POST /api/plugins/install (admin)"
+                )
             }
         },
     }
