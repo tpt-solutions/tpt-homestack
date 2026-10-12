@@ -182,6 +182,16 @@ pub struct PageDef {
     pub action: Option<String>,
 }
 
+/// A forward-only schema migration (`[[migrations]]`). Applied once per
+/// plugin, in version order, inside the install transaction.
+#[derive(Debug, Clone, Deserialize, PartialEq)]
+pub struct MigrationDef {
+    /// Positive, strictly increasing across the manifest.
+    pub version: u32,
+    /// One SQL statement each. Each must touch only `<id>_*` tables.
+    pub statements: Vec<String>,
+}
+
 /// Parsed `plugin.toml`.
 #[derive(Debug, Clone, Deserialize, PartialEq)]
 pub struct PluginManifest {
@@ -194,6 +204,8 @@ pub struct PluginManifest {
     pub tables: Vec<TableDef>,
     #[serde(default)]
     pub pages: Vec<PageDef>,
+    #[serde(default)]
+    pub migrations: Vec<MigrationDef>,
 }
 
 /// Parse and validate a manifest from TOML text.
@@ -296,11 +308,36 @@ fn validate(m: &PluginManifest) -> Result<(), anyhow::Error> {
     if m.limits.max_memory_mb == 0 || m.limits.max_memory_mb > 256 {
         anyhow::bail!("limits.max_memory_mb must be 1-256");
     }
+    validate_migrations(m)?;
     if m.limits.max_fuel < 1000 {
         anyhow::bail!("limits.max_fuel must be at least 1000");
     }
     if !(1..=60_000).contains(&m.limits.max_millis) {
         anyhow::bail!("limits.max_millis must be 1-60000");
+    }
+    Ok(())
+}
+
+/// Migrations are forward-only: versions must be positive and strictly
+/// increasing, each statement must pass the plugin SQL scope, and the set is
+/// capped so a manifest cannot describe unbounded work.
+fn validate_migrations(m: &PluginManifest) -> Result<(), anyhow::Error> {
+    if m.migrations.len() > 100 {
+        anyhow::bail!("at most 100 migrations per plugin");
+    }
+    let mut previous = 0u32;
+    for migration in &m.migrations {
+        if migration.version == 0 || migration.version <= previous {
+            anyhow::bail!("migration versions must be positive and strictly increasing");
+        }
+        previous = migration.version;
+        if migration.statements.is_empty() {
+            anyhow::bail!("migration {} has no statements", migration.version);
+        }
+        for statement in &migration.statements {
+            crate::scope::validate_scoped_sql(&m.plugin.id, statement)
+                .map_err(|e| anyhow::anyhow!("migration {}: {e}", migration.version))?;
+        }
     }
     Ok(())
 }
@@ -383,6 +420,45 @@ mod tests {
         assert_eq!(m.tables.len(), 1);
         assert_eq!(m.pages.len(), 1);
         assert_eq!(m.permissions.to_json(), "[\"db\"]");
+    }
+
+    #[test]
+    fn migrations_must_be_ordered_scoped_and_non_empty() {
+        let good = format!(
+            "{SAMPLE}
+[[migrations]]
+version = 1
+statements = [\"ALTER TABLE calendar_events ADD COLUMN note TEXT\"]
+"
+        );
+        assert_eq!(parse(&good).unwrap().migrations.len(), 1);
+
+        let out_of_scope = good.replace("calendar_events ADD", "users ADD");
+        assert!(
+            parse(&out_of_scope).is_err(),
+            "migration must stay in the plugin's tables"
+        );
+
+        let unordered = format!(
+            "{good}
+[[migrations]]
+version = 1
+statements = [\"ALTER TABLE calendar_events ADD COLUMN x TEXT\"]
+"
+        );
+        assert!(
+            parse(&unordered).is_err(),
+            "versions must strictly increase"
+        );
+
+        let empty = format!(
+            "{SAMPLE}
+[[migrations]]
+version = 1
+statements = []
+"
+        );
+        assert!(parse(&empty).is_err());
     }
 
     #[test]

@@ -83,7 +83,7 @@ Key decisions
 - [x] Host functions: file access (scoped to a plugin directory) — only if permitted by the manifest
 - [x] Permission model: plugins declare capabilities, admin approves on install — install takes an `approve` list; anything not approved is denied at runtime (fail closed); install reports requested vs approved
 - [x] Sandbox limits: memory cap, fuel/instruction limit, timeouts
-- [ ] Plugin migrations (declared in the manifest, run by the host)
+- [x] Plugin migrations (declared in the manifest, run by the host) — forward-only `[[migrations]]`, checksummed, applied in one transaction with the install; tested in tests/lifecycle.rs
 - [x] Plugin API route dispatch (`/api/<plugin-id>/…` to the WASM handler)
 - [ ] Declarative UI: manifest-defined pages, forms, lists, tables, detail views rendered by the shell
 - [ ] Plugin lifecycle: install, enable, disable, update, uninstall (with data retention option) — install, upgrade and uninstall (keep and drop data) are tested; enable/disable exist but have no automated test

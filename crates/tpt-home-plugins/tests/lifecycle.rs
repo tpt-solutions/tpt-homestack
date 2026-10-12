@@ -251,3 +251,167 @@ async fn a_plugin_installed_without_a_grant_has_no_capabilities() {
             .unwrap();
     assert_eq!(stored.0, "[]");
 }
+
+/// Stage a package whose manifest carries the given `[[migrations]]` TOML.
+fn stage_with_migrations(id: &str, version: &str, migrations: &str) -> PathBuf {
+    let dir = stage(id, version, &valid_wasm());
+    let mut text = std::fs::read_to_string(dir.join("plugin.toml")).unwrap();
+    text.push_str(migrations);
+    std::fs::write(dir.join("plugin.toml"), text).unwrap();
+    dir
+}
+
+async fn column_names(db: &tpt_home_core::db::DbPool, table: &str) -> Vec<String> {
+    let rows: Vec<(String,)> =
+        sqlx::query_as(&format!("SELECT name FROM pragma_table_info('{table}')"))
+            .fetch_all(db)
+            .await
+            .unwrap();
+    rows.into_iter().map(|r| r.0).collect()
+}
+
+async fn applied_versions(db: &tpt_home_core::db::DbPool, id: &str) -> Vec<i64> {
+    let rows: Vec<(i64,)> = sqlx::query_as(
+        "SELECT version FROM plugin_migrations WHERE plugin_id = ?1 ORDER BY version",
+    )
+    .bind(id)
+    .fetch_all(db)
+    .await
+    .unwrap();
+    rows.into_iter().map(|r| r.0).collect()
+}
+
+#[tokio::test]
+async fn fresh_install_runs_every_migration_in_order() {
+    let db = fresh_db().await;
+    let id = "migr";
+    let migrations = r#"
+[[migrations]]
+version = 1
+statements = ["ALTER TABLE migr_items ADD COLUMN note TEXT"]
+
+[[migrations]]
+version = 2
+statements = ["ALTER TABLE migr_items ADD COLUMN done INTEGER"]
+"#;
+    lifecycle::install_from_dir(
+        &db,
+        &stage_with_migrations(id, "0.1.0", migrations),
+        true,
+        &grant_all(),
+    )
+    .await
+    .unwrap();
+    let cols = column_names(&db, "migr_items").await;
+    assert!(
+        cols.contains(&"note".to_string()) && cols.contains(&"done".to_string()),
+        "{cols:?}"
+    );
+    assert_eq!(applied_versions(&db, id).await, vec![1, 2]);
+}
+
+#[tokio::test]
+async fn upgrade_runs_only_the_new_migration() {
+    let db = fresh_db().await;
+    let id = "migrup";
+    let v1 = r#"
+[[migrations]]
+version = 1
+statements = ["ALTER TABLE migrup_items ADD COLUMN note TEXT"]
+"#;
+    lifecycle::install_from_dir(
+        &db,
+        &stage_with_migrations(id, "0.1.0", v1),
+        true,
+        &grant_all(),
+    )
+    .await
+    .unwrap();
+
+    let v2 = format!(
+        "{v1}\n[[migrations]]\nversion = 2\nstatements = [\"ALTER TABLE migrup_items ADD COLUMN done INTEGER\"]\n"
+    );
+    lifecycle::install_from_dir(
+        &db,
+        &stage_with_migrations(id, "0.2.0", &v2),
+        true,
+        &grant_all(),
+    )
+    .await
+    .unwrap();
+    assert_eq!(applied_versions(&db, id).await, vec![1, 2]);
+    assert!(
+        column_names(&db, "migrup_items")
+            .await
+            .contains(&"done".to_string())
+    );
+}
+
+#[tokio::test]
+async fn an_edited_migration_refuses_the_upgrade() {
+    let db = fresh_db().await;
+    let id = "migredit";
+    let v1 = r#"
+[[migrations]]
+version = 1
+statements = ["ALTER TABLE migredit_items ADD COLUMN note TEXT"]
+"#;
+    lifecycle::install_from_dir(
+        &db,
+        &stage_with_migrations(id, "0.1.0", v1),
+        true,
+        &grant_all(),
+    )
+    .await
+    .unwrap();
+
+    // Same version, different SQL: the recorded checksum no longer matches.
+    let edited = v1.replace("note TEXT", "note TEXT NOT NULL DEFAULT ''");
+    let err = lifecycle::install_from_dir(
+        &db,
+        &stage_with_migrations(id, "0.1.1", &edited),
+        true,
+        &grant_all(),
+    )
+    .await
+    .expect_err("editing an applied migration must be refused");
+    assert!(
+        format!("{err:?}").contains("changed after it was applied"),
+        "{err:?}"
+    );
+    // The previous version still runs.
+    assert_eq!(registry::get(id).unwrap().manifest.plugin.version, "0.1.0");
+}
+
+#[tokio::test]
+async fn a_failing_migration_leaves_no_partial_schema() {
+    let db = fresh_db().await;
+    let id = "migrbad";
+    // The first statement succeeds; the second names a missing column. The
+    // whole migration must roll back, including the first statement.
+    let bad = r#"
+[[migrations]]
+version = 1
+statements = [
+  "ALTER TABLE migrbad_items ADD COLUMN extra TEXT",
+  "ALTER TABLE migrbad_items DROP COLUMN no_such_column"
+]
+"#;
+    let err = lifecycle::install_from_dir(
+        &db,
+        &stage_with_migrations(id, "0.1.0", bad),
+        true,
+        &grant_all(),
+    )
+    .await
+    .expect_err("a failing statement must fail the install");
+    assert!(format!("{err:?}").contains("migration 1"), "{err:?}");
+    assert!(
+        !column_names(&db, "migrbad_items")
+            .await
+            .contains(&"extra".to_string()),
+        "partial DDL must roll back"
+    );
+    assert!(applied_versions(&db, id).await.is_empty());
+    assert!(registry::get(id).is_none());
+}

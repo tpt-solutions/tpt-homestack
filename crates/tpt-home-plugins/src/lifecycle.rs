@@ -35,6 +35,84 @@ inventory::submit! {
     }
 }
 
+inventory::submit! {
+    tpt_home_core::MigrationEntry {
+        key: "tpt-home-plugins:002_plugin_migrations",
+        sql: r#"
+            CREATE TABLE IF NOT EXISTS plugin_migrations (
+                plugin_id  TEXT    NOT NULL,
+                version    INTEGER NOT NULL,
+                checksum   TEXT    NOT NULL,
+                applied_at INTEGER NOT NULL,
+                PRIMARY KEY (plugin_id, version)
+            );
+        "#,
+    }
+}
+
+/// Checksum of a migration's statements. Recorded when it runs, so an edited
+/// migration is detected instead of silently skipped.
+fn migration_checksum(statements: &[String]) -> String {
+    use sha2::{Digest, Sha256};
+    let mut hasher = Sha256::new();
+    for statement in statements {
+        hasher.update(statement.as_bytes());
+        hasher.update([0u8]);
+    }
+    format!("{:x}", hasher.finalize())
+}
+
+/// Run the manifest's pending migrations inside `tx`, in version order.
+/// Already-applied versions are skipped after their checksum is verified.
+/// Returns how many ran.
+async fn apply_migrations(
+    conn: &mut sqlx::SqliteConnection,
+    manifest: &PluginManifest,
+    now: i64,
+) -> Result<usize, anyhow::Error> {
+    let id = &manifest.plugin.id;
+    let applied: Vec<(i64, String)> =
+        sqlx::query_as("SELECT version, checksum FROM plugin_migrations WHERE plugin_id = ?1")
+            .bind(id)
+            .fetch_all(&mut *conn)
+            .await?;
+
+    let mut ran = 0;
+    for migration in &manifest.migrations {
+        let checksum = migration_checksum(&migration.statements);
+        if let Some((_, recorded)) = applied
+            .iter()
+            .find(|(version, _)| *version == i64::from(migration.version))
+        {
+            if *recorded != checksum {
+                anyhow::bail!(
+                    "migration {} changed after it was applied; add a new migration instead",
+                    migration.version
+                );
+            }
+            continue;
+        }
+        for statement in &migration.statements {
+            sqlx::query(statement.as_str())
+                .execute(&mut *conn)
+                .await
+                .map_err(|e| anyhow::anyhow!("migration {}: {e}", migration.version))?;
+        }
+        sqlx::query(
+            "INSERT INTO plugin_migrations (plugin_id, version, checksum, applied_at)
+             VALUES (?1, ?2, ?3, ?4)",
+        )
+        .bind(id)
+        .bind(i64::from(migration.version))
+        .bind(&checksum)
+        .bind(now)
+        .execute(&mut *conn)
+        .await?;
+        ran += 1;
+    }
+    Ok(ran)
+}
+
 /// Register the runtime nav provider (one sidebar entry per enabled
 /// plugin's declarative pages). Called once at startup.
 fn install_nav_provider() {
@@ -107,8 +185,12 @@ pub async fn install_from_dir(
     // Install-time approval: the admin names what to grant. Only what the
     // manifest requests can be approved, and runtime enforces the intersection.
     let approved = granted.intersect(&manifest.permissions);
+    // Migrations and the registry row commit together: a failed migration
+    // leaves no half-applied schema and no row.
     let applied = async {
         create_manifest_tables(db, &manifest).await?;
+        let mut tx = db.begin().await?;
+        apply_migrations(&mut tx, &manifest, now).await?;
         sqlx::query(
             "INSERT INTO plugins (id, name, version, enabled, approved_permissions, installed_at)
              VALUES (?1, ?2, ?3, ?4, ?5, ?6)
@@ -125,8 +207,9 @@ pub async fn install_from_dir(
         .bind(enable)
         .bind(approved.to_json())
         .bind(now)
-        .execute(db)
+        .execute(&mut *tx)
         .await?;
+        tx.commit().await?;
         Ok::<(), anyhow::Error>(())
     }
     .await;
@@ -168,6 +251,10 @@ async fn rollback_install(db: &SqlitePool, id: &str, dest: &Path, backup: &Path,
         return;
     }
     // Fresh install: nothing existed before, so every table and row is ours.
+    let _ = sqlx::query("DELETE FROM plugin_migrations WHERE plugin_id = ?1")
+        .bind(id)
+        .execute(db)
+        .await;
     if let Err(e) = drop_plugin_tables(db, id).await {
         tracing::error!(plugin = %id, error = %e, "rollback: could not drop tables");
     }
@@ -370,6 +457,12 @@ pub async fn uninstall(db: &SqlitePool, id: &str, keep_data: bool) -> Result<u32
         0
     } else {
         sqlx::query("DELETE FROM plugin_kv WHERE plugin_id = ?1")
+            .bind(id)
+            .execute(db)
+            .await?;
+        // Migration history goes with the data. Kept data keeps its history,
+        // so a reinstall does not run migrations against tables it already has.
+        sqlx::query("DELETE FROM plugin_migrations WHERE plugin_id = ?1")
             .bind(id)
             .execute(db)
             .await?;

@@ -43,6 +43,7 @@ cargo build --release --target wasm32-unknown-unknown
 | `[permissions]` | `db`, `kv`, `storage` — all default to denied. A capability is granted only when the manifest requests it **and** the admin approves it at install (`approve` form field, for example `approve=db,kv`). Anything not approved is refused at runtime, and the install response lists requested and approved. |
 | `[limits]` | `max_fuel` (instruction budget per call), `max_memory_mb`, `max_millis` (wall-clock budget per call, default 5000, checked at every host call) |
 | `[[tables]]` | Tables created as `<id>_<name>` at install; column kinds `text`, `integer`, `real`, `bool` |
+| `[[migrations]]` | Forward-only schema changes: `version` (positive, strictly increasing) and `statements` (one each, touching only `<id>_*` tables). Each version runs once per plugin, in one transaction with the install. An edited, already-applied migration refuses the upgrade. There are no down migrations: to undo a change, add a new migration. |
 | `[[pages]]` | Declarative pages under `/plugins/<id><path>`: `kind = "table"` (rows from a scoped table) or `kind = "form"` (POSTs to the plugin API) |
 
 The example in [`plugins/tpt-home-bp-calendar/plugin.toml`](../plugins/tpt-home-bp-calendar/plugin.toml) uses every section.
