@@ -136,12 +136,14 @@ pub fn unpack_verify(
         std::io::Read::read_to_end(&mut entry, &mut bytes)?;
         match path.as_str() {
             "plugin.toml" => {
-                manifest_text =
-                    Some(String::from_utf8(bytes).map_err(|_| anyhow::anyhow!("plugin.toml not UTF-8"))?);
+                manifest_text = Some(
+                    String::from_utf8(bytes)
+                        .map_err(|_| anyhow::anyhow!("plugin.toml not UTF-8"))?,
+                );
             }
             "checksums.sha256" => {
-                let text =
-                    String::from_utf8(bytes).map_err(|_| anyhow::anyhow!("checksums.sha256 not UTF-8"))?;
+                let text = String::from_utf8(bytes)
+                    .map_err(|_| anyhow::anyhow!("checksums.sha256 not UTF-8"))?;
                 for line in text.lines() {
                     let line = line.trim();
                     if line.is_empty() {

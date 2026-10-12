@@ -36,7 +36,7 @@ fn default_api_version() -> u32 {
 
 /// `[permissions]` section. Everything defaults to *denied*; the admin sees
 /// these at install time and the runtime enforces the approved set.
-#[derive(Debug, Clone, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Default, Deserialize, PartialEq, Eq)]
 #[serde(default)]
 pub struct Permissions {
     /// SQL access, scoped to `<id>_*` tables only.
@@ -45,16 +45,6 @@ pub struct Permissions {
     pub kv: bool,
     /// File storage scoped to the plugin's data directory.
     pub storage: bool,
-}
-
-impl Default for Permissions {
-    fn default() -> Self {
-        Self {
-            db: false,
-            kv: false,
-            storage: false,
-        }
-    }
 }
 
 impl Permissions {
@@ -185,7 +175,11 @@ fn validate(m: &PluginManifest) -> Result<(), anyhow::Error> {
         );
     }
     if m.plugin.entry.is_empty()
-        || !m.plugin.entry.chars().all(|c| c.is_ascii_alphanumeric() || matches!(c, '.' | '_' | '-'))
+        || !m
+            .plugin
+            .entry
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || matches!(c, '.' | '_' | '-'))
     {
         anyhow::bail!("entry must be a plain file name like 'plugin.wasm'");
     }
@@ -199,7 +193,11 @@ fn validate(m: &PluginManifest) -> Result<(), anyhow::Error> {
         for col in &table.columns {
             valid_component(&col.name, "column name")?;
             if !matches!(col.kind.as_str(), "text" | "integer" | "real" | "bool") {
-                anyhow::bail!("column '{}.{}' kind must be text|integer|real|bool", table.name, col.name);
+                anyhow::bail!(
+                    "column '{}.{}' kind must be text|integer|real|bool",
+                    table.name,
+                    col.name
+                );
             }
             if !seen.insert(&col.name) {
                 anyhow::bail!("duplicate column '{}' in table '{}'", col.name, table.name);
@@ -245,7 +243,9 @@ fn valid_component(name: &str, what: &str) -> Result<(), anyhow::Error> {
     if ok {
         Ok(())
     } else {
-        anyhow::bail!("{what} '{name}' must be 1-64 chars: lowercase letters, digits, '_', leading letter")
+        anyhow::bail!(
+            "{what} '{name}' must be 1-64 chars: lowercase letters, digits, '_', leading letter"
+        )
     }
 }
 
@@ -296,7 +296,10 @@ mod tests {
         let bad_id = SAMPLE.replace("id = \"calendar\"", "id = \"Bad Id!\"");
         assert!(parse(&bad_id).is_err());
 
-        let bad_api = SAMPLE.replace("entry = \"plugin.wasm\"", "api_version = 99\n        entry = \"plugin.wasm\"");
+        let bad_api = SAMPLE.replace(
+            "entry = \"plugin.wasm\"",
+            "api_version = 99\n        entry = \"plugin.wasm\"",
+        );
         assert!(parse(&bad_api).is_err());
     }
 

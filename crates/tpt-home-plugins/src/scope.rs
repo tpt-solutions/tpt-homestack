@@ -125,7 +125,9 @@ pub fn validate_scoped_sql(plugin_id: &str, sql: &str) -> Result<String, ApiErro
         .collect();
     for kw in FORBIDDEN_KEYWORDS {
         if words.iter().any(|w| w == kw) {
-            return Err(ApiError::bad_request(format!("plugin SQL: {kw} is not permitted")));
+            return Err(ApiError::bad_request(format!(
+                "plugin SQL: {kw} is not permitted"
+            )));
         }
     }
 
@@ -179,7 +181,10 @@ pub fn validate_scoped_sql(plugin_id: &str, sql: &str) -> Result<String, ApiErro
                     table_pos = true; // ALTER … RENAME TO <new-name>
                     continue;
                 }
-                if matches!(upper.as_str(), "FROM" | "JOIN" | "INTO" | "UPDATE" | "TABLE") {
+                if matches!(
+                    upper.as_str(),
+                    "FROM" | "JOIN" | "INTO" | "UPDATE" | "TABLE"
+                ) {
                     table_pos = true;
                 }
             }
@@ -218,8 +223,7 @@ mod tests {
     use super::*;
 
     fn ok(sql: &str) {
-        validate_scoped_sql("calendar", sql)
-            .unwrap_or_else(|e| panic!("{sql:?} rejected: {e}"));
+        validate_scoped_sql("calendar", sql).unwrap_or_else(|e| panic!("{sql:?} rejected: {e}"));
     }
 
     fn rejected(sql: &str) {

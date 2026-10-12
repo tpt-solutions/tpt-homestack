@@ -12,6 +12,6 @@ publish = false
 crate-type = ["cdylib", "rlib"]
 
 [dependencies]
-tpt-home-plugin-sdk = { path = "../../crates/tpt-home-plugin-sdk" }
+tpt-home-plugin-sdk = { path = "../../crates/tpt-home-plugin-sdk", version = "0.1.0" }
 serde = { workspace = true }
 serde_json = { workspace = true }

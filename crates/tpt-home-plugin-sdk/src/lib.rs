@@ -171,8 +171,9 @@ fn unpack_host(packed: i64) -> Option<Vec<u8>> {
 /// Serialize a response into guest memory and return the packed pointer the
 /// host expects from `tpt_entry`.
 pub fn pack_response(response: &Response) -> i64 {
-    let bytes = serde_json::to_vec(response)
-        .unwrap_or_else(|_| br#"{"status":500,"content_type":"text/plain","body":"serialize failed"}"#.to_vec());
+    let bytes = serde_json::to_vec(response).unwrap_or_else(|_| {
+        br#"{"status":500,"content_type":"text/plain","body":"serialize failed"}"#.to_vec()
+    });
     let ptr = alloc(bytes.len());
     // SAFETY: `ptr` has room for `bytes.len()` bytes and does not overlap.
     unsafe { ptr::copy_nonoverlapping(bytes.as_ptr(), ptr, bytes.len()) };
@@ -202,7 +203,8 @@ pub fn db_execute(sql: &str) -> Result<u64, String> {
     // SAFETY: as in `log`.
     let packed = unsafe { host::tpt_db_execute(sql.as_ptr() as i32, sql.len() as i32) };
     let bytes = unpack_host(packed).ok_or("database access denied or statement failed")?;
-    let value: Value = serde_json::from_slice(&bytes).map_err(|e| format!("bad host response: {e}"))?;
+    let value: Value =
+        serde_json::from_slice(&bytes).map_err(|e| format!("bad host response: {e}"))?;
     Ok(value["rows_affected"].as_u64().unwrap_or(0))
 }
 
@@ -291,7 +293,10 @@ mod tests {
     #[test]
     fn sql_quote_doubles_quotes() {
         assert_eq!(sql_quote("it's"), "'it''s'");
-        assert_eq!(sql_quote("x'); DROP TABLE t; --"), "'x''); DROP TABLE t; --'");
+        assert_eq!(
+            sql_quote("x'); DROP TABLE t; --"),
+            "'x''); DROP TABLE t; --'"
+        );
     }
 
     #[test]

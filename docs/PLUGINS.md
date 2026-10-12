@@ -79,7 +79,11 @@ cargo test -p tpt-home-plugins --test calendar_plugin -- --ignored
 It is ignored by default because it performs a nested wasm build. It needs
 the `wasm32-unknown-unknown` target (`rustup target add wasm32-unknown-unknown`).
 
-Debug builds of the wasmi interpreter recurse deeply. The host runs plugin
-calls on blocking threads with the default 2 MiB stack, which is enough for
-release builds but can overflow in debug builds. Use `--release` when running
-the server against plugins.
+Debug builds of the wasmi interpreter need more stack than the default 2 MiB
+(a fuel-limited infinite loop overflows it), so the tests run plugin calls on
+roomier threads. The server uses the default stack, which is fine for release
+builds.
+
+Debug-build crashes on Windows (an access violation on the first plugin DB call) went
+away after upgrading to rusqlite 0.32, which bundles a newer SQLite.
+Release builds are unaffected either way.

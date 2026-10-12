@@ -5,6 +5,7 @@ Owner: TPT Solutions · License: `MIT OR Apache-2.0` · Targets: Linux x86_64, L
 Key decisions
 - Official blueprints (notes, drop, track) are compiled in via `#[blueprint]` macros.
 - Community blueprints are WASM plugins on `wasmi`, with a declarative manifest and host-rendered UI.
+- Plugin authoring tiers (Phase 4b): JS scripts (Boa), WASM with a documented ABI, external processes via API tokens, and an MCP server for AI agents.
 - Multi-user auth with roles.
 - No Apache-only dependencies (wasmtime is excluded).
 
@@ -93,6 +94,58 @@ Key decisions
 - [ ] Hot load/unload without a server restart
 - [ ] Plugin isolation and failure handling (a crashing plugin must not take down the host)
 - [ ] Plugin tests and fuzzing of the host boundary
+
+## Phase 4b — Easy Plugin Authoring (JS scripts, any-language WASM, external processes, MCP)
+Four tiers sharing one manifest + capability model: JS scripts (Boa), WASM (Rust SDK + documented ABI), external processes (any language), MCP for AI agents.
+
+### A. Foundation (prerequisite for everything below)
+- [ ] Link `tpt-home-plugins` into the CLI binary (Cargo dep + `BLUEPRINT_LINK_ANCHORS` entry) — `tpt-home run` serves no plugins today
+- [ ] Runtime abstraction: replace `LoadedPlugin.module: wasmi::Module` with an enum/trait (`Wasm` | `Script` | `External`); dispatch through it
+- [ ] Add `[plugin] runtime = "wasm" | "js" | "external"` to the manifest (default `wasm`, reject unknown values)
+- [ ] Extract shared `HostServices` (db/kv/storage/log + capability checks + size/row caps) from the wasmi closures; wasmi imports become thin wrappers
+- [ ] Enforce the stored `approved_permissions` at runtime (dispatch currently uses `manifest.permissions`)
+- [ ] Normalize denied-capability behavior (today: `-1` for reads, silent no-op for writes, trap on scope errors) before freezing ABI v1
+- [ ] Package format: allow `manifest.plugin.entry` and `src/**` script files (unpack currently only accepts `plugin.wasm`)
+- [ ] Roll back plugin dir + DB row when load fails after install
+- [ ] Wall-clock timeout for plugin calls (fuel does not cover time spent in host functions)
+
+### B. JS script runtime (Boa)
+- [ ] Add Boa dependency (pinned); verify license and tree with `cargo deny`
+- [ ] Script contract: `handle(req) -> {status, content_type, body}`; only global is `tpt` (log, db, kv, storage) backed by `HostServices`
+- [ ] Lock down the engine: no `eval`/`Function`, imports, fs, net or timers
+- [ ] Map `[limits]` to the engine: memory cap, instruction budget, wall-clock deadline
+- [ ] Compile once at load and cache; fresh context per request
+- [ ] Ship `tpt.d.ts` typings for editor autocomplete (TypeScript is author-side transpile only)
+- [ ] Script sandbox tests (infinite loop, memory bomb, denied caps, scope violations, forbidden globals)
+- [ ] Conformance test: same fixture plugin as wasm and JS gives identical responses
+
+### C. Documented WASM ABI for other languages
+- [ ] `docs/PLUGIN_ABI.md`: exports, packed return and `-1`, JSON shapes, 4 MiB caps, re-entrant `tpt_alloc`, fuel semantics, denied/trap behavior, no WASI
+- [ ] Minimal WAT example in the docs
+- [ ] Starter templates for 1-2 other languages (e.g. AssemblyScript, TinyGo) with host conformance tests
+
+### D. API tokens + external-process plugins
+- [ ] `api_tokens` table (hashed token, user, name, scopes, expiry, last used) + migration
+- [ ] Bearer-token middleware yielding the same `AuthUser` as the session resolver
+- [ ] `tpt-home token create|list|revoke`
+- [ ] `runtime = "external"`: register by manifest + scoped token; same capabilities and table-prefix rules; host-rendered UI unchanged
+- [ ] Python example external plugin (~30 lines)
+- [ ] Optional (stretch): admin-approved local process supervision from the manifest
+
+### E. MCP server (`tpt-home-mcp`)
+- [ ] Hand-rolled JSON-RPC 2.0 (`initialize`, `tools/list`, `tools/call`); only add an MCP crate if `cargo deny` clears it
+- [ ] Streamable HTTP transport at `POST /api/mcp` (bearer auth, rate limit)
+- [ ] Stdio transport: `tpt-home mcp --token ...`
+- [ ] Add `description` + `schema` to `RouteEntry` (macro args; default description from the doc comment)
+- [ ] Derive tools from enabled blueprint routes and plugin manifests (`[[tables]]`, form actions) + generic `plugin_call`
+- [ ] Execute tool calls through the in-process router with role enforcement (`Role::allows`) and rate limiting; never expose public routes
+- [ ] `docs/AI_PLUGIN_GUIDE.md` so an AI agent can write sandboxed JS plugins
+- [ ] Optional: admin-only `plugin_install` MCP tool with a human approval step
+- [ ] MCP tests: scripted JSON-RPC sessions over stdio and HTTP; non-admin token cannot call admin tools
+
+### F. Housekeeping
+- [ ] Update `docs/PLUGINS.md` for the new runtimes, tokens and MCP
+- [ ] `cargo deny check` for every new dependency
 
 ## Phase 5 — Official Blueprints
 ### `tpt-home-bp-notes`

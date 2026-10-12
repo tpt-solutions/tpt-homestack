@@ -141,11 +141,14 @@ pub fn nav_entries() -> Vec<(String, String)> {
     nav
 }
 
-static NAV_PROVIDER: std::sync::OnceLock<fn() -> Vec<(String, String)>> = std::sync::OnceLock::new();
+/// A nav entry: `(label, path)`.
+type NavEntry = (String, String);
+
+static NAV_PROVIDER: std::sync::OnceLock<fn() -> Vec<NavEntry>> = std::sync::OnceLock::new();
 
 /// Install a runtime nav provider (one extra sidebar entry per enabled
 /// plugin). Returns `false` if one was already installed.
-pub fn set_nav_provider(provider: fn() -> Vec<(String, String)>) -> bool {
+pub fn set_nav_provider(provider: fn() -> Vec<NavEntry>) -> bool {
     NAV_PROVIDER.set(provider).is_ok()
 }
 

@@ -30,7 +30,8 @@ fn handle(req: Request) -> Response {
 }
 
 fn list_events() -> Response {
-    match db_query("SELECT id, title, starts_at FROM calendar_events ORDER BY starts_at LIMIT 200") {
+    match db_query("SELECT id, title, starts_at FROM calendar_events ORDER BY starts_at LIMIT 200")
+    {
         Ok(rows) => Response::json(200, &rows),
         Err(e) => Response::error(500, e),
     }

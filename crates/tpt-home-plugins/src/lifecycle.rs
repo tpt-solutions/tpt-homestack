@@ -195,10 +195,9 @@ pub async fn load_installed(db: &SqlitePool) -> Result<usize, anyhow::Error> {
     install_nav_provider();
     std::fs::create_dir_all(plugins_root())?;
 
-    let rows: Vec<(String, bool)> =
-        sqlx::query_as("SELECT id, enabled FROM plugins ORDER BY id")
-            .fetch_all(db)
-            .await?;
+    let rows: Vec<(String, bool)> = sqlx::query_as("SELECT id, enabled FROM plugins ORDER BY id")
+        .fetch_all(db)
+        .await?;
 
     let mut loaded = 0;
     for (id, enabled) in rows {

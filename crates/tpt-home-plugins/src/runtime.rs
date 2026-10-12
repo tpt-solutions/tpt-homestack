@@ -187,7 +187,11 @@ pub fn call_plugin(
 }
 
 /// Read a raw UTF-8 string from guest memory.
-fn guest_str(caller: &Caller<'_, &mut HostCtx>, ptr: u32, len: u32) -> Result<String, wasmi::Error> {
+fn guest_str(
+    caller: &Caller<'_, &mut HostCtx>,
+    ptr: u32,
+    len: u32,
+) -> Result<String, wasmi::Error> {
     if len > MAX_STRING_RESULT {
         return Err(wasmi::Error::new("host string length exceeds cap"));
     }
@@ -322,7 +326,11 @@ fn register_imports(linker: &mut Linker<&mut HostCtx>) -> Result<(), wasmi::Erro
             let plugin_id = caller.data().plugin_id.clone();
             let key = guest_str(&caller, ptr as u32, len as u32)?;
             let db_path = caller.data().db_path.clone();
-            let conn = caller.data_mut().state.conn(&db_path).map_err(err_to_wasmi)?;
+            let conn = caller
+                .data_mut()
+                .state
+                .conn(&db_path)
+                .map_err(err_to_wasmi)?;
             let value: Option<String> = conn
                 .query_row(
                     "SELECT value FROM plugin_kv WHERE plugin_id = ?1 AND key = ?2",
@@ -356,7 +364,11 @@ fn register_imports(linker: &mut Linker<&mut HostCtx>) -> Result<(), wasmi::Erro
             let key = guest_str(&caller, kptr as u32, klen as u32)?;
             let value = guest_str(&caller, vptr as u32, vlen as u32)?;
             let db_path = caller.data().db_path.clone();
-            let conn = caller.data_mut().state.conn(&db_path).map_err(err_to_wasmi)?;
+            let conn = caller
+                .data_mut()
+                .state
+                .conn(&db_path)
+                .map_err(err_to_wasmi)?;
             conn.execute(
                 "INSERT INTO plugin_kv (plugin_id, key, value) VALUES (?1, ?2, ?3)
                  ON CONFLICT(plugin_id, key) DO UPDATE SET value = excluded.value",
@@ -377,7 +389,11 @@ fn register_imports(linker: &mut Linker<&mut HostCtx>) -> Result<(), wasmi::Erro
             let plugin_id = caller.data().plugin_id.clone();
             let key = guest_str(&caller, ptr as u32, len as u32)?;
             let db_path = caller.data().db_path.clone();
-            let conn = caller.data_mut().state.conn(&db_path).map_err(err_to_wasmi)?;
+            let conn = caller
+                .data_mut()
+                .state
+                .conn(&db_path)
+                .map_err(err_to_wasmi)?;
             conn.execute(
                 "DELETE FROM plugin_kv WHERE plugin_id = ?1 AND key = ?2",
                 rusqlite::params![plugin_id, key],

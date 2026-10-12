@@ -22,14 +22,8 @@ allow = [
     "BSL-1.0",
     "CDLA-Permissive-2.0",
 ]
-deny = [
-    "GPL-1.0", "GPL-2.0", "GPL-3.0",
-    "AGPL-1.0", "AGPL-3.0",
-    "LGPL-2.0", "LGPL-2.1", "LGPL-3.0",
-    "MPL-1.1", "MPL-2.0",
-    "SSPL-1.0",
-    "EUPL-1.1", "EUPL-1.2",
-]
+# Anything not listed in `allow` (GPL, AGPL, LGPL, MPL, SSPL, EUPL, ...) is
+# rejected by default.
 
 [bans]
 multiple-versions = "warn"

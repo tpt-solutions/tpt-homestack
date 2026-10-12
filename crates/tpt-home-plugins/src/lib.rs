@@ -17,9 +17,9 @@ pub mod registry;
 pub mod runtime;
 pub mod scope;
 
-/// The plugin API catch-all: `/api/<plugin_id>/<rest>` for every method.
-/// Registered manually (the macro registers one method per route); static
-/// routes elsewhere under `/api` win over the parameter.
+// The plugin API catch-all: `/api/<plugin_id>/<rest>` for every method.
+// Registered manually (the macro registers one method per route); static
+// routes elsewhere under `/api` win over the parameter.
 inventory::submit! {
     tpt_home_core::RouteEntry {
         blueprint: "tpt-home-plugins",
@@ -40,7 +40,7 @@ inventory::submit! {
     }
 }
 
-/// Plugin pages: `/plugins/<plugin_id>/<page-path>`, behind login.
+// Plugin pages: `/plugins/<plugin_id>/<page-path>`, behind login.
 inventory::submit! {
     tpt_home_core::RouteEntry {
         blueprint: "tpt-home-plugins",
@@ -56,7 +56,7 @@ inventory::submit! {
     }
 }
 
-/// Load installed plugins (and the nav provider) at server startup.
+// Load installed plugins (and the nav provider) at server startup.
 inventory::submit! {
     tpt_home_core::StartupEntry {
         name: "plugins-load",

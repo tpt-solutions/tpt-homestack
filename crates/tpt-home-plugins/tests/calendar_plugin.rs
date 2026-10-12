@@ -36,7 +36,10 @@ fn build_calendar(target_dir: &Path) -> Vec<u8> {
         .arg(target_dir)
         .status()
         .expect("run cargo");
-    assert!(status.success(), "building the calendar plugin for wasm32 failed");
+    assert!(
+        status.success(),
+        "building the calendar plugin for wasm32 failed"
+    );
     std::fs::read(target_dir.join("wasm32-unknown-unknown/release/tpt_home_bp_calendar.wasm"))
         .expect("wasm artifact")
 }
@@ -99,7 +102,13 @@ fn run() {
 
     // Create two events. The second title is hostile SQL and must be stored
     // verbatim, not executed.
-    let r = call(&granted, "POST", "/events", "", Some(r#"{"title":"Dentist","starts_at":1700000000}"#));
+    let r = call(
+        &granted,
+        "POST",
+        "/events",
+        "",
+        Some(r#"{"title":"Dentist","starts_at":1700000000}"#),
+    );
     assert_eq!(r.status, 201, "{}", r.body);
     let hostile = "x'); DROP TABLE calendar_events; --";
     let body = serde_json::json!({ "title": hostile, "starts_at": 1700000100 }).to_string();
@@ -116,7 +125,13 @@ fn run() {
     assert_eq!(rows[1]["title"], hostile);
 
     // Validation: empty titles and bad bodies are client errors.
-    let r = call(&granted, "POST", "/events", "", Some(r#"{"title":"   ","starts_at":1}"#));
+    let r = call(
+        &granted,
+        "POST",
+        "/events",
+        "",
+        Some(r#"{"title":"   ","starts_at":1}"#),
+    );
     assert_eq!(r.status, 400, "{}", r.body);
     let r = call(&granted, "POST", "/events", "", Some("not json"));
     assert_eq!(r.status, 400, "{}", r.body);
@@ -129,7 +144,10 @@ fn run() {
     assert_eq!(r.status, 404, "{}", r.body);
     let r = call(&granted, "DELETE", "/events", "id=abc", None);
     assert_eq!(r.status, 400, "{}", r.body);
-    assert_eq!(json_rows(&call(&granted, "GET", "/events", "", None)).len(), 1);
+    assert_eq!(
+        json_rows(&call(&granted, "GET", "/events", "", None)).len(),
+        1
+    );
 
     // Without the `db` permission the host denies the query and the plugin
     // reports it as an error response, not a trap.

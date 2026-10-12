@@ -5,7 +5,7 @@
 //! pages, and the admin lifecycle API.
 
 use axum::extract::{Multipart, Path, Query, State};
-use axum::http::{header, StatusCode};
+use axum::http::{StatusCode, header};
 use axum::response::{Html, IntoResponse, Response};
 use axum::{Extension, Json};
 use serde::Deserialize;
@@ -42,7 +42,9 @@ pub async fn api_invoke(
     body: axum::body::Bytes,
 ) -> Result<Response, ApiError> {
     let Some(plugin) = crate::registry::get_enabled(&plugin_id) else {
-        return Err(ApiError::not_found(format!("no enabled plugin '{plugin_id}'")));
+        return Err(ApiError::not_found(format!(
+            "no enabled plugin '{plugin_id}'"
+        )));
     };
 
     let query_string = query
@@ -72,18 +74,12 @@ pub async fn api_invoke(
     .map_err(|e| ApiError::internal(format!("plugin task failed: {e}")))?
     .map_err(|e| ApiError::internal(format!("plugin error: {e}")))?;
 
-    let status = StatusCode::from_u16(result.status)
-        .unwrap_or(StatusCode::INTERNAL_SERVER_ERROR);
+    let status = StatusCode::from_u16(result.status).unwrap_or(StatusCode::INTERNAL_SERVER_ERROR);
     let content_type = result
         .content_type
         .parse()
         .unwrap_or_else(|_| header::HeaderValue::from_static("text/plain"));
-    Ok((
-        status,
-        [(header::CONTENT_TYPE, content_type)],
-        result.body,
-    )
-        .into_response())
+    Ok((status, [(header::CONTENT_TYPE, content_type)], result.body).into_response())
 }
 
 /// Render a declarative plugin page: `/plugins/<plugin_id>/<page-path>`.
@@ -93,15 +89,14 @@ pub async fn page(
     Path((plugin_id, rest)): Path<(String, String)>,
 ) -> Result<Html<String>, ApiError> {
     let Some(plugin) = crate::registry::get_enabled(&plugin_id) else {
-        return Err(ApiError::not_found(format!("no enabled plugin '{plugin_id}'")));
+        return Err(ApiError::not_found(format!(
+            "no enabled plugin '{plugin_id}'"
+        )));
     };
     let wanted = format!("/{rest}");
-    let Some(page_def) = plugin
-        .manifest
-        .pages
-        .iter()
-        .find(|p| p.path == wanted || format!("/{rest}").trim_end_matches('/') == p.path.trim_end_matches('/'))
-    else {
+    let Some(page_def) = plugin.manifest.pages.iter().find(|p| {
+        p.path == wanted || format!("/{rest}").trim_end_matches('/') == p.path.trim_end_matches('/')
+    }) else {
         return Err(ApiError::not_found(format!("page '{wanted}' not found")));
     };
 
@@ -131,15 +126,9 @@ pub async fn page(
                 }
                 out.push(serde_json::Value::Object(obj));
             }
-            ui::plugin_table_page(
-                &page_def.title,
-                &page_def.columns,
-                &out,
-                &api_base,
-            )
+            ui::plugin_table_page(&page_def.columns, &out, &api_base)
         }
         "form" => ui::plugin_form_page(
-            &page_def.title,
             &page_def.fields,
             &format!("{api_base}{}", page_def.action.as_deref().unwrap_or("/")),
         ),
@@ -166,18 +155,15 @@ pub async fn page(
 
 /// GET /api/plugins — installed plugins + status.
 #[tpt_home_macros::bp_route(get, "/api/plugins", role = "admin")]
-pub async fn list_plugins(
-    State(db): State<DbPool>,
-) -> Result<impl IntoResponse, ApiError> {
+pub async fn list_plugins(State(db): State<DbPool>) -> Result<impl IntoResponse, ApiError> {
     let mut out = Vec::new();
     for (plugin, enabled) in crate::registry::all() {
-        let (installed_at,): (i64,) = sqlx::query_as(
-            "SELECT installed_at FROM plugins WHERE id = ?1",
-        )
-        .bind(&plugin.manifest.plugin.id)
-        .fetch_optional(&db)
-        .await?
-        .unwrap_or((0,));
+        let (installed_at,): (i64,) =
+            sqlx::query_as("SELECT installed_at FROM plugins WHERE id = ?1")
+                .bind(&plugin.manifest.plugin.id)
+                .fetch_optional(&db)
+                .await?
+                .unwrap_or((0,));
         out.push(json!({
             "id": plugin.manifest.plugin.id,
             "name": plugin.manifest.plugin.name,
@@ -222,15 +208,18 @@ pub async fn install_plugin(
                 package = Some(bytes);
             }
             Some("enable") => {
-                enable = matches!(field.text().await.unwrap_or_default().as_str(), "true" | "1" | "on");
+                enable = matches!(
+                    field.text().await.unwrap_or_default().as_str(),
+                    "true" | "1" | "on"
+                );
             }
             _ => {
                 let _ = field.text().await;
             }
         }
     }
-    let archive = package
-        .ok_or_else(|| ApiError::bad_request("multipart field \"package\" is required"))?;
+    let archive =
+        package.ok_or_else(|| ApiError::bad_request("multipart field \"package\" is required"))?;
 
     let (staged, _manifest) = lifecycle::stage_package(&archive)
         .map_err(|e| ApiError::bad_request(format!("invalid package: {e}")))?;
@@ -292,4 +281,3 @@ pub async fn uninstall_plugin(
         .map_err(|e| ApiError::internal(e.to_string()))?;
     Ok(Json(json!({ "ok": true, "dropped_tables": dropped })))
 }
-

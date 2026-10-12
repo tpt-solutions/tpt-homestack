@@ -26,10 +26,10 @@ homepage = "https://example.com/tpt-homestack"
 
 [workspace.dependencies]
 # Internal crates
-tpt-home-core = { path = "crates/tpt-home-core" }
-tpt-home-macros = { path = "crates/tpt-home-macros" }
-tpt-home-ui = { path = "crates/tpt-home-ui" }
-tpt-home-api = { path = "crates/tpt-home-api" }
+tpt-home-core = { path = "crates/tpt-home-core", version = "0.1.0" }
+tpt-home-macros = { path = "crates/tpt-home-macros", version = "0.1.0" }
+tpt-home-ui = { path = "crates/tpt-home-ui", version = "0.1.0" }
+tpt-home-api = { path = "crates/tpt-home-api", version = "0.1.0" }
 
 # Web stack
 axum = { version = "0.8", features = ["multipart"] }
@@ -64,7 +64,7 @@ inventory = "0.3"
 
 # Plugin runtime (MIT OR Apache-2.0, no Apache-only deps)
 wasmi = { version = "2.0", default-features = false, features = ["std", "wat", "validate"] }
-rusqlite = { version = "0.31", features = ["bundled"] }
+rusqlite = { version = "0.32", features = ["bundled"] }
 tar = "0.4"
 
 # Errors
@@ -84,9 +84,4 @@ syn = { version = "2", features = ["full", "extra-traits"] }
 lto = true
 codegen-units = 1
 strip = true
-opt-level = 3
-
-# The bundled SQLite C build misbehaves at opt-level 0 on Windows debug builds
-# (access violation on the first plugin DB call), so optimize it in dev.
-[profile.dev.package.libsqlite3-sys]
 opt-level = 3
