@@ -110,14 +110,14 @@ Four tiers sharing one manifest + capability model: JS scripts (Boa), WASM (Rust
 - [x] Wall-clock timeout for plugin calls (checked at every host call; pure guest loops are bounded by fuel only, see docs/PLUGINS.md)
 
 ### B. JS script runtime (Boa)
-- [ ] Add Boa dependency (pinned); verify license and tree with `cargo deny`
-- [ ] Script contract: `handle(req) -> {status, content_type, body}`; only global is `tpt` (log, db, kv, storage) backed by `HostServices`
-- [ ] Lock down the engine: no `eval`/`Function`, imports, fs, net or timers
-- [ ] Map `[limits]` to the engine: memory cap, instruction budget, wall-clock deadline
-- [ ] Compile once at load and cache; fresh context per request
-- [ ] Ship `tpt.d.ts` typings for editor autocomplete (TypeScript is author-side transpile only)
-- [ ] Script sandbox tests (infinite loop, memory bomb, denied caps, scope violations, forbidden globals)
-- [ ] Conformance test: same fixture plugin as wasm and JS gives identical responses
+- [x] Add Boa dependency (pinned); verify license and tree with `cargo deny` — pinned `=0.21.1` behind the `js` feature; licenses/bans/sources pass; `cargo deny check advisories` fails on `paste` (RUSTSEC-2024-0436, unmaintained, pulled only by Boa) — needs a decision. Release binary: 10.33 MiB without js, 18.31 MiB with.
+- [x] Script contract: `handle(req) -> {status, content_type, body}`; only global is `tpt` (log, db, kv, storage) backed by `HostServices`
+- [x] Lock down the engine: no `eval`/`Function`, imports, fs, net or timers
+- [x] Map `[limits]` to the engine: memory cap, instruction budget, wall-clock deadline (approximate: loop budget from max_fuel, recursion 256; no heap cap, bounded by source size and host caps)
+- [ ] Compile once at load and cache; fresh context per request — deviation: validated at load, re-parsed per call (Boa scripts are bound to their realm)
+- [x] Ship `tpt.d.ts` typings for editor autocomplete (TypeScript is author-side transpile only)
+- [x] Script sandbox tests (infinite loop, memory bomb, denied caps, scope violations, forbidden globals)
+- [x] Conformance test: same fixture plugin as wasm and JS gives identical responses
 
 ### C. Documented WASM ABI for other languages
 - [ ] `docs/PLUGIN_ABI.md`: exports, packed return and `-1`, JSON shapes, 4 MiB caps, re-entrant `tpt_alloc`, fuel semantics, denied/trap behavior, no WASI

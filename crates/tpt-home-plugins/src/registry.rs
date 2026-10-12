@@ -21,6 +21,9 @@ use crate::manifest::{Permissions, PluginManifest};
 #[derive(Clone)]
 pub enum Backend {
     Wasm(Module),
+    /// A validated JS script (`runtime = "js"`), built with the `js` feature.
+    #[cfg(feature = "js")]
+    Script(std::sync::Arc<crate::script::ScriptSource>),
 }
 
 /// One loaded plugin: manifest, compiled backend and package directory.

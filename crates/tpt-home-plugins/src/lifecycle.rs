@@ -9,7 +9,7 @@ use std::path::{Path, PathBuf};
 use sqlx::SqlitePool;
 use wasmi::Module;
 
-use crate::manifest::{self, Permissions, PluginManifest};
+use crate::manifest::{self, Permissions, PluginManifest, Runtime};
 use crate::{package, registry};
 
 inventory::submit! {
@@ -79,7 +79,7 @@ pub async fn install_from_dir(
     enable: bool,
 ) -> Result<PluginManifest, anyhow::Error> {
     let manifest = manifest::from_dir(staged_dir)?;
-    let module = compile_module(staged_dir, &manifest)?;
+    let backend = load_backend(staged_dir, &manifest)?;
     let id = manifest.plugin.id.clone();
     let now = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
@@ -138,7 +138,7 @@ pub async fn install_from_dir(
     registry::put(
         registry::LoadedPlugin {
             manifest: manifest.clone(),
-            backend: registry::Backend::Wasm(module),
+            backend,
             dir: dest.clone(),
             approved,
         },
@@ -240,21 +240,47 @@ pub async fn drop_plugin_tables(db: &SqlitePool, plugin_id: &str) -> Result<u32,
     Ok(dropped)
 }
 
-/// Compile the wasm entry of a package directory.
-fn compile_module(dir: &Path, manifest: &PluginManifest) -> Result<Module, anyhow::Error> {
-    let wasm = std::fs::read(dir.join(&manifest.plugin.entry))?;
-    Module::new(crate::runtime::engine(), wasm.as_slice())
-        .map_err(|e| anyhow::anyhow!("compile {}: {e}", manifest.plugin.entry))
+/// Build the execution backend for an installed or staged package, compiling
+/// or validating its entry file. Failing here, before anything is recorded,
+/// is what keeps a broken package from being installed.
+fn load_backend(dir: &Path, manifest: &PluginManifest) -> Result<registry::Backend, anyhow::Error> {
+    match manifest.plugin.runtime {
+        Runtime::Wasm => {
+            let wasm = std::fs::read(dir.join(&manifest.plugin.entry))?;
+            let module = Module::new(crate::runtime::engine(), wasm.as_slice())
+                .map_err(|e| anyhow::anyhow!("compile {}: {e}", manifest.plugin.entry))?;
+            Ok(registry::Backend::Wasm(module))
+        }
+        Runtime::Js => script_backend(dir, manifest),
+        Runtime::External => anyhow::bail!("runtime 'external' is not implemented yet"),
+    }
 }
 
-/// Compile + register a plugin from its installed directory.
+#[cfg(feature = "js")]
+fn script_backend(
+    dir: &Path,
+    manifest: &PluginManifest,
+) -> Result<registry::Backend, anyhow::Error> {
+    let script = crate::script::ScriptSource::load(dir, manifest)?;
+    Ok(registry::Backend::Script(std::sync::Arc::new(script)))
+}
+
+#[cfg(not(feature = "js"))]
+fn script_backend(
+    _dir: &Path,
+    _manifest: &PluginManifest,
+) -> Result<registry::Backend, anyhow::Error> {
+    anyhow::bail!("runtime 'js' needs a build with the 'js' feature")
+}
+
+/// Load + register a plugin from its installed directory.
 fn load_plugin_dir(dir: &Path, enabled: bool, approved: &Permissions) -> Result<(), anyhow::Error> {
     let manifest = manifest::from_dir(dir)?;
-    let module = compile_module(dir, &manifest)?;
+    let backend = load_backend(dir, &manifest)?;
     crate::registry::put(
         registry::LoadedPlugin {
             manifest,
-            backend: registry::Backend::Wasm(module),
+            backend,
             dir: dir.to_path_buf(),
             approved: approved.clone(),
         },

@@ -44,7 +44,7 @@ pub enum Runtime {
     /// Sandboxed WebAssembly on wasmi (the only tier implemented so far).
     #[default]
     Wasm,
-    /// JS scripts on Boa (Phase 4b-B, not implemented yet).
+    /// JS scripts on Boa, compiled in with the `js` feature.
     Js,
     /// External process over a scoped API token (Phase 4b-D, not implemented yet).
     External,
@@ -216,15 +216,11 @@ fn validate(m: &PluginManifest) -> Result<(), anyhow::Error> {
             SUPPORTED_API_VERSION
         );
     }
-    if m.plugin.runtime != Runtime::Wasm {
-        anyhow::bail!(
-            "runtime '{}' is not implemented yet; only 'wasm' plugins load",
-            match m.plugin.runtime {
-                Runtime::Js => "js",
-                Runtime::External => "external",
-                Runtime::Wasm => "wasm",
-            }
-        );
+    match m.plugin.runtime {
+        Runtime::Wasm => {}
+        Runtime::Js if cfg!(feature = "js") => {}
+        Runtime::Js => anyhow::bail!("runtime 'js' needs a build with the 'js' feature"),
+        Runtime::External => anyhow::bail!("runtime 'external' is not implemented yet"),
     }
     if m.plugin.entry.is_empty()
         || !m
@@ -409,13 +405,20 @@ mod tests {
         );
         assert!(parse(&unknown).is_err());
 
-        // Recognised but not yet implemented: rejected until the tier lands.
+        // `js` parses, but only builds compiled with the `js` feature accept it.
         let js = SAMPLE.replace(
             "entry = \"plugin.wasm\"",
             "entry = \"plugin.wasm\"
         runtime = \"js\"",
         );
-        let err = parse(&js).unwrap_err().to_string();
+        assert_eq!(parse(&js).is_ok(), cfg!(feature = "js"));
+        // `external` is recognised but not implemented yet.
+        let external = SAMPLE.replace(
+            "entry = \"plugin.wasm\"",
+            "entry = \"plugin.wasm\"
+        runtime = \"external\"",
+        );
+        let err = parse(&external).unwrap_err().to_string();
         assert!(err.contains("not implemented"), "{err}");
     }
 

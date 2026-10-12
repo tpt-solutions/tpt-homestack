@@ -71,6 +71,16 @@ pub async fn api_invoke(
             &db_path(),
             &storage_dir(&plugin.manifest.plugin.id),
         ),
+        #[cfg(feature = "js")]
+        Backend::Script(script) => crate::script::call_script(
+            script,
+            &plugin.manifest,
+            &request,
+            &plugin.manifest.plugin.id,
+            &granted,
+            &db_path(),
+            &storage_dir(&plugin.manifest.plugin.id),
+        ),
     })
     .await
     .map_err(|e| ApiError::internal(format!("plugin task failed: {e}")))?

@@ -47,6 +47,26 @@ cargo build --release --target wasm32-unknown-unknown
 
 The example in [`plugins/tpt-home-bp-calendar/plugin.toml`](../plugins/tpt-home-bp-calendar/plugin.toml) uses every section.
 
+## JS script plugins (`runtime = "js"`)
+
+A script plugin is a single JavaScript file (`entry`, for example `main.js`)
+that defines a global `handle(req)`, returning `{status, content_type, body}`.
+It runs on the Boa engine, which is compiled in only with the `js` cargo
+feature (on by default in the `tpt-home` binary; build with
+`--no-default-features` for a smaller binary that rejects `runtime = "js"`).
+
+The host surface is the frozen `tpt` global, typed in
+[`crates/tpt-home-plugins/types/tpt.d.ts`](../crates/tpt-home-plugins/types/tpt.d.ts).
+Denied calls return `null` or `false` rather than throwing. Scripts cannot
+use `eval`, `Function`, the function-constructor escapes, modules, timers or
+`require`. Source is capped at 1 MiB.
+
+Limits: `max_fuel` sets Boa's loop-iteration budget (roughly `max_fuel / 50`,
+so 50M gives about a million iterations per loop); recursion is capped at 256.
+`max_millis` is enforced at every host call. Boa has no heap cap, so the
+script's memory use is bounded only by the source size and the host's string
+caps. Treat untrusted scripts with that in mind.
+
 ## Host services (ABI v1)
 
 | SDK function | Capability | Notes |

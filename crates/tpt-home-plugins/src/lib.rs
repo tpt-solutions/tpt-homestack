@@ -17,6 +17,8 @@ pub mod package;
 pub mod registry;
 pub mod runtime;
 pub mod scope;
+#[cfg(feature = "js")]
+pub mod script;
 
 /// Link anchor for the binary: see `tpt-home-cli`'s `BLUEPRINT_LINK_ANCHORS`.
 /// Never called at runtime; its address keeps the plugin host's startup and
