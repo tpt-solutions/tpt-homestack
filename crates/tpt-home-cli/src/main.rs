@@ -21,10 +21,11 @@ use tpt_home_core::config::Config;
 /// startup tasks) in the binary. Add an entry for every compiled-in
 /// blueprint.
 #[allow(dead_code)]
-static BLUEPRINT_LINK_ANCHORS: [fn() -> &'static str; 3] = [
+static BLUEPRINT_LINK_ANCHORS: [fn() -> &'static str; 4] = [
     tpt_home_bp_notes::__link_anchor,
     tpt_home_bp_drop::__link_anchor,
     tpt_home_bp_track::__link_anchor,
+    tpt_home_plugins::__link_anchor,
 ];
 
 #[derive(Parser)]

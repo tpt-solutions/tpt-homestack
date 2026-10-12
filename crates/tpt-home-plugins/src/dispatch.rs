@@ -59,13 +59,14 @@ pub async fn api_invoke(
         body: (!body.is_empty()).then(|| String::from_utf8_lossy(&body).into_owned()),
     };
 
+    let granted = plugin.effective_permissions();
     let result = tokio::task::spawn_blocking(move || {
         runtime::call_plugin(
             &plugin.module,
             &plugin.manifest,
             &request,
             &plugin.manifest.plugin.id,
-            &plugin.manifest.permissions,
+            &granted,
             &db_path(),
             &storage_dir(&plugin.manifest.plugin.id),
         )

@@ -63,6 +63,28 @@ impl Permissions {
         }
         serde_json::to_string(&granted).expect("permission list serialization")
     }
+
+    /// Parse the `plugins.approved_permissions` JSON array. Unknown entries
+    /// and malformed JSON grant nothing, so a corrupt row fails closed.
+    pub fn from_json(text: &str) -> Self {
+        let names: Vec<String> = serde_json::from_str(text).unwrap_or_default();
+        let has = |name: &str| names.iter().any(|n| n == name);
+        Self {
+            db: has("db"),
+            kv: has("kv"),
+            storage: has("storage"),
+        }
+    }
+
+    /// Capabilities that are both requested by the manifest and approved by
+    /// the admin. The runtime uses this, never the manifest alone.
+    pub fn intersect(&self, approved: &Self) -> Self {
+        Self {
+            db: self.db && approved.db,
+            kv: self.kv && approved.kv,
+            storage: self.storage && approved.storage,
+        }
+    }
 }
 
 /// `[limits]` section. Defaults are deliberately modest.
@@ -289,6 +311,46 @@ mod tests {
         assert_eq!(m.tables.len(), 1);
         assert_eq!(m.pages.len(), 1);
         assert_eq!(m.permissions.to_json(), "[\"db\"]");
+    }
+
+    #[test]
+    fn approved_permissions_round_trip_and_fail_closed() {
+        let all = Permissions {
+            db: true,
+            kv: true,
+            storage: true,
+        };
+        assert_eq!(Permissions::from_json(&all.to_json()), all);
+        assert_eq!(Permissions::from_json("not json"), Permissions::default());
+        assert_eq!(
+            Permissions::from_json("[\"bogus\"]"),
+            Permissions::default()
+        );
+    }
+
+    #[test]
+    fn effective_permissions_need_request_and_approval() {
+        let requested = Permissions {
+            db: true,
+            kv: true,
+            storage: false,
+        };
+        let approved = Permissions {
+            db: true,
+            kv: false,
+            storage: true,
+        };
+        // db is requested and approved; kv is requested but not approved;
+        // storage is approved but never requested.
+        let effective = requested.intersect(&approved);
+        assert_eq!(
+            effective,
+            Permissions {
+                db: true,
+                kv: false,
+                storage: false
+            }
+        );
     }
 
     #[test]

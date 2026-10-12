@@ -9,7 +9,7 @@ use std::path::{Path, PathBuf};
 use sqlx::SqlitePool;
 use wasmi::Module;
 
-use crate::manifest::{self, PluginManifest};
+use crate::manifest::{self, Permissions, PluginManifest};
 use crate::{package, registry};
 
 inventory::submit! {
@@ -87,6 +87,9 @@ pub async fn install_from_dir(
     std::fs::rename(staged_dir, &dest)?;
 
     create_manifest_tables(db, &manifest).await?;
+    // Install-time approval: the admin is shown the manifest's request and
+    // the grant is recorded here. Runtime enforces the intersection.
+    let approved = manifest.permissions.clone();
 
     sqlx::query(
         "INSERT INTO plugins (id, name, version, enabled, approved_permissions, installed_at)
@@ -107,7 +110,7 @@ pub async fn install_from_dir(
     .execute(db)
     .await?;
 
-    load_plugin_dir(&dest, enable)?;
+    load_plugin_dir(&dest, enable, &approved)?;
     Ok(manifest)
 }
 
@@ -173,7 +176,7 @@ pub async fn drop_plugin_tables(db: &SqlitePool, plugin_id: &str) -> Result<u32,
 }
 
 /// Compile + register a plugin from its installed directory.
-fn load_plugin_dir(dir: &Path, enabled: bool) -> Result<(), anyhow::Error> {
+fn load_plugin_dir(dir: &Path, enabled: bool, approved: &Permissions) -> Result<(), anyhow::Error> {
     let manifest = manifest::from_dir(dir)?;
     let wasm = std::fs::read(dir.join(&manifest.plugin.entry))?;
     let module = Module::new(crate::runtime::engine(), wasm.as_slice())
@@ -183,6 +186,7 @@ fn load_plugin_dir(dir: &Path, enabled: bool) -> Result<(), anyhow::Error> {
             manifest,
             module,
             dir: dir.to_path_buf(),
+            approved: approved.clone(),
         },
         enabled,
     );
@@ -195,18 +199,20 @@ pub async fn load_installed(db: &SqlitePool) -> Result<usize, anyhow::Error> {
     install_nav_provider();
     std::fs::create_dir_all(plugins_root())?;
 
-    let rows: Vec<(String, bool)> = sqlx::query_as("SELECT id, enabled FROM plugins ORDER BY id")
-        .fetch_all(db)
-        .await?;
+    let rows: Vec<(String, bool, String)> =
+        sqlx::query_as("SELECT id, enabled, approved_permissions FROM plugins ORDER BY id")
+            .fetch_all(db)
+            .await?;
 
     let mut loaded = 0;
-    for (id, enabled) in rows {
+    for (id, enabled, approved_json) in rows {
         let dir = plugin_dir(&id);
         if !dir.is_dir() {
             tracing::warn!(plugin = %id, "registered plugin directory missing");
             continue;
         }
-        match load_plugin_dir(&dir, enabled) {
+        let approved = Permissions::from_json(&approved_json);
+        match load_plugin_dir(&dir, enabled, &approved) {
             Ok(()) => loaded += 1,
             Err(e) => tracing::error!(plugin = %id, error = %e, "plugin failed to load"),
         }

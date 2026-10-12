@@ -18,6 +18,7 @@ tpt-home-api = { workspace = true }
 tpt-home-bp-notes = { path = "../../blueprints/tpt-home-bp-notes", version = "0.1.0" }
 tpt-home-bp-drop = { path = "../../blueprints/tpt-home-bp-drop", version = "0.1.0" }
 tpt-home-bp-track = { path = "../../blueprints/tpt-home-bp-track", version = "0.1.0" }
+tpt-home-plugins = { path = "../tpt-home-plugins", version = "0.1.0" }
 clap = { workspace = true }
 clap_complete = { workspace = true }
 tokio = { workspace = true }

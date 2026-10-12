@@ -17,6 +17,14 @@ pub mod registry;
 pub mod runtime;
 pub mod scope;
 
+/// Link anchor for the binary: see `tpt-home-cli`'s `BLUEPRINT_LINK_ANCHORS`.
+/// Never called at runtime; its address keeps the plugin host's startup and
+/// route registrations in the binary.
+#[inline(never)]
+pub fn __link_anchor() -> &'static str {
+    env!("CARGO_PKG_NAME")
+}
+
 // The plugin API catch-all: `/api/<plugin_id>/<rest>` for every method.
 // Registered manually (the macro registers one method per route); static
 // routes elsewhere under `/api` win over the parameter.

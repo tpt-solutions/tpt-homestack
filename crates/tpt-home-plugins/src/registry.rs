@@ -14,7 +14,7 @@ use std::sync::{Arc, OnceLock, RwLock};
 
 use wasmi::Module;
 
-use crate::manifest::PluginManifest;
+use crate::manifest::{Permissions, PluginManifest};
 
 /// One loaded plugin: manifest, compiled module and package directory.
 pub struct LoadedPlugin {
@@ -22,9 +22,16 @@ pub struct LoadedPlugin {
     pub module: Module,
     /// Directory containing `plugin.toml` + the wasm entry.
     pub dir: PathBuf,
+    /// Admin-approved capabilities from `plugins.approved_permissions`.
+    pub approved: Permissions,
 }
 
 impl LoadedPlugin {
+    /// The capabilities the runtime grants: requested and approved.
+    pub fn effective_permissions(&self) -> Permissions {
+        self.manifest.permissions.intersect(&self.approved)
+    }
+
     /// Convenience: namespaced table name `<id>_<name>`.
     pub fn scoped_table(&self, table: &str) -> String {
         format!("{}_{}", self.manifest.plugin.id, table)

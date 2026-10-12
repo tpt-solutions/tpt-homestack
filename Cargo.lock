@@ -2231,6 +2231,7 @@ dependencies = [
  "tpt-home-bp-notes",
  "tpt-home-bp-track",
  "tpt-home-core",
+ "tpt-home-plugins",
  "tracing",
  "uuid",
 ]
