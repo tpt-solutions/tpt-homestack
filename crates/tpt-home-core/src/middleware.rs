@@ -113,10 +113,12 @@ pub async fn role_guard(req: Request, next: Next, required: &'static str) -> Res
 }
 
 /// Defense-in-depth CSRF guard: state-changing `/api` calls must carry
-/// `Content-Type: application/json` (or `multipart/form-data` for uploads).
-/// Cross-site HTML forms cannot set that header without a CORS preflight,
-/// which is not granted by default. `SameSite=Lax` cookies are the primary
-/// line of defense; this is the second.
+/// `Content-Type: application/json`, `multipart/form-data` (uploads) or
+/// `text/csv` (imports). HTML forms can only send `text/plain`, urlencoded or
+/// multipart bodies, and any other type from another origin needs a CORS
+/// preflight, which is not granted by default, so none of these can be forged
+/// by a cross-site page. `SameSite=Lax` cookies are the primary line of
+/// defense; this is the second.
 pub async fn csrf_guard(req: Request, next: Next) -> Response {
     let mutating = !matches!(
         req.method(),
@@ -135,10 +137,13 @@ pub async fn csrf_guard(req: Request, next: Next) -> Response {
                     .to_ascii_lowercase()
             })
             .unwrap_or_default();
-        if ct != "application/json" && ct != "multipart/form-data" {
+        if !matches!(
+            ct.as_str(),
+            "application/json" | "multipart/form-data" | "text/csv"
+        ) {
             return (
                 StatusCode::UNSUPPORTED_MEDIA_TYPE,
-                "{\"error\":\"Content-Type must be application/json (or multipart/form-data)\"}",
+                "{\"error\":\"Content-Type must be application/json, multipart/form-data or text/csv\"}",
             )
                 .into_response();
         }

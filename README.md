@@ -62,9 +62,21 @@ blueprint API surface — they double as reference implementations.
 ## Write your first blueprint in 5 minutes
 
 ```sh
-tpt-home new my_app          # scaffolds blueprints/tpt-home-bp-my-app and registers it
+tpt-home new my_app          # scaffolds blueprints/tpt-home-bp-my-app and links it in
 cargo build                  # that's the whole activation step
 ```
+
+Starter templates (pick one with `--template`, then edit):
+
+| Template | What it gives you |
+|---|---|
+| `basic` (default) | One table, one endpoint pair, a placeholder page |
+| `records` | List and form: add, view and delete records |
+| `logbook` | Dated numeric entries with totals, averages and a summary |
+| `file-inbox` | Upload, list, download and delete files |
+| `scheduled-job` | A background job that writes a periodic snapshot |
+| `dashboard` | Metric cards built from grouped queries |
+| `scheduled-fetch` | Fetches an admin-set URL on a schedule and keeps the responses |
 
 What a blueprint looks like — no routing boilerplate, no trait methods, no
 manual registration:
@@ -99,6 +111,9 @@ async fn my_app_page(user: axum::Extension<AuthUser>) -> impl IntoResponse {
     // server-rendered page, automatically in the sidebar behind login
 }
 ```
+
+Background work uses `#[bp_job(every = "5m")]` on an `async fn(DbPool)`; it
+runs one period after boot, then on every period.
 
 Compile-time guarantees: `#[bp_route]` paths must start with `/api/`, ids and
 paths are validated by the macro, and blueprint migrations are namespaced by

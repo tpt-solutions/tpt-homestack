@@ -11,13 +11,14 @@
 pub mod admin_routes;
 pub mod auth_routes;
 pub mod pages;
+pub mod webhook_routes;
 
 use std::net::SocketAddr;
 use std::time::Duration;
 
 use axum::Router;
 use axum::extract::DefaultBodyLimit;
-use axum::routing::{get, patch, post};
+use axum::routing::{delete, get, patch, post};
 use tower_http::cors::CorsLayer;
 
 use tpt_home_core::RateLimiter;
@@ -64,6 +65,7 @@ pub fn build_router(db: DbPool, cfg: &Config) -> Router {
         .route("/healthz", get(healthz))
         .route("/api/auth/login", post(auth_routes::login))
         .route("/api/setup", post(auth_routes::setup))
+        .route("/api/hooks/{name}", post(webhook_routes::receive))
         .route("/login", get(pages::login_page))
         .route("/setup", get(pages::setup_page))
         .merge(registry::apply_public_routes(Router::new()));
@@ -82,6 +84,11 @@ pub fn build_router(db: DbPool, cfg: &Config) -> Router {
         .route("/dashboard", get(pages::dashboard_page))
         .route("/settings", get(pages::settings_page))
         .route("/admin/users", get(pages::users_page))
+        .route("/admin/jobs", get(pages::jobs_page))
+        .route(
+            "/api/admin/jobs",
+            get(admin_routes::jobs).layer(admin_role()),
+        )
         .route("/api/auth/logout", post(auth_routes::logout))
         .route("/api/auth/me", get(auth_routes::me))
         .route(
@@ -99,6 +106,20 @@ pub fn build_router(db: DbPool, cfg: &Config) -> Router {
             patch(admin_routes::update)
                 .delete(admin_routes::delete)
                 .layer(admin_role()),
+        )
+        .route(
+            "/api/webhooks",
+            get(webhook_routes::list)
+                .post(webhook_routes::create)
+                .layer(admin_role()),
+        )
+        .route(
+            "/api/webhooks/{id}",
+            delete(webhook_routes::delete).layer(admin_role()),
+        )
+        .route(
+            "/api/webhooks/{id}/deliveries",
+            get(webhook_routes::deliveries).layer(admin_role()),
         )
         .merge(registry::apply_routes(Router::new()))
         .merge(registry::apply_ui_routes(Router::new()))
@@ -191,6 +212,7 @@ pub async fn serve(cfg: Config) -> anyhow::Result<()> {
     init_tracing(&cfg);
     let db = init_server(cfg.clone()).await?;
     registry::spawn_startup_tasks(db.clone());
+    registry::spawn_jobs(db.clone());
     tokio::spawn(session_purge_loop(db.clone()));
 
     let app = build_router(db, &cfg);

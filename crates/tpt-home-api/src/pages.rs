@@ -109,3 +109,61 @@ pub async fn users_page(
         &ui::users_admin_content(&rows),
     )))
 }
+
+/// GET /admin/jobs: scheduled jobs and their recent runs (admins only).
+pub async fn jobs_page(Extension(user): Extension<AuthUser>) -> Result<Html<String>, Redirect> {
+    if !user.is_admin() {
+        return Err(Redirect::to("/dashboard"));
+    }
+    let view = ui::UserView {
+        username: user.username.clone(),
+        role: user.role.as_str().to_string(),
+    };
+    Ok(Html(ui::page(
+        "Admin · Jobs",
+        &registry::nav_entries(),
+        "/admin/jobs",
+        &view,
+        JOBS_BODY,
+    )))
+}
+
+const JOBS_BODY: &str = r##"
+<div class="card">
+  <div class="spread">
+    <span class="muted">Scheduled background jobs. Refreshes every 10 seconds; history resets on restart.</span>
+    <button class="secondary" onclick="load()">Refresh</button>
+  </div>
+  <div id="msg"></div>
+  <div id="jobs"><p class="muted">Loading…</p></div>
+</div>
+<script>
+function esc(s) { const d = document.createElement('div'); d.textContent = s ?? ''; return d.innerHTML; }
+function when(unix) { return unix == null ? '–' : new Date(Number(unix) * 1000).toLocaleString(); }
+function outcome(o) {
+  if (o == null) return '<span class="muted">not run yet</span>';
+  const cls = o === 'ok' ? 'badge' : (o === 'failed' ? 'badge warn' : 'badge danger');
+  return '<span class="' + cls + '">' + esc(o) + '</span>';
+}
+async function load() {
+  try {
+    const r = await fetch('/api/admin/jobs');
+    const jobs = await r.json();
+    if (!r.ok) throw new Error(jobs.error || r.statusText);
+    document.getElementById('msg').innerHTML = '';
+    document.getElementById('jobs').innerHTML = jobs.length === 0
+      ? '<p class="muted">No scheduled jobs are registered.</p>'
+      : '<table><thead><tr><th>Blueprint</th><th>Job</th><th>Every</th><th>Last started</th><th>Last finished</th><th>Last result</th><th>Next run</th><th>Runs</th><th>Failures</th></tr></thead><tbody>' +
+        jobs.map(j =>
+          '<tr><td>' + esc(j.blueprint) + '</td><td>' + esc(j.name) + '</td><td>' + Number(j.every_secs) + ' s</td>' +
+          '<td>' + esc(when(j.last_started_at)) + '</td><td>' + esc(when(j.last_finished_at)) + '</td>' +
+          '<td>' + outcome(j.last_outcome) + (j.last_error ? '<div class="muted">' + esc(j.last_error) + '</div>' : '') + '</td>' +
+          '<td>' + esc(when(j.next_run_at)) + '</td><td>' + Number(j.runs) + '</td><td>' + Number(j.failures) + '</td></tr>'
+        ).join('') + '</tbody></table>';
+  } catch (e) {
+    document.getElementById('msg').innerHTML = '<div class="msg error">' + esc(e.message) + '</div>';
+  }
+}
+load();
+setInterval(load, 10000);
+</script>"##;

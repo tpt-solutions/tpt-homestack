@@ -407,26 +407,39 @@ async fn http_endpoint(
     }
 }
 
+/// The HTTP transport as a router: `POST /api/mcp`. The caller's `AuthUser`
+/// (and optional `TokenScopes`) must already be attached by the auth guard, as
+/// it is in the server. Exposed so tests can drive the endpoint directly.
+pub fn http_router() -> axum::Router {
+    axum::Router::new().route("/api/mcp", axum::routing::post(http_endpoint))
+}
+
+/// One stdio line in, one reply line out (newline included), or `None` for a
+/// blank line or a notification. Parse errors get a JSON-RPC error reply.
+pub async fn stdio_reply(caller: &Caller, line: &str) -> Option<String> {
+    if line.trim().is_empty() {
+        return None;
+    }
+    let reply = match serde_json::from_str::<Value>(line) {
+        Ok(message) => handle(caller, &message).await,
+        Err(e) => Some(rpc_error(
+            &Value::Null,
+            PARSE_ERROR,
+            &format!("invalid JSON: {e}"),
+        )),
+    }?;
+    let mut text = reply.to_string();
+    text.push('\n');
+    Some(text)
+}
+
 /// Serve MCP over stdio: one JSON-RPC message per line on stdin, one reply per
 /// line on stdout. Returns when stdin closes.
 pub async fn run_stdio(caller: Caller) -> std::io::Result<()> {
     let mut lines = BufReader::new(tokio::io::stdin()).lines();
     let mut stdout = tokio::io::stdout();
     while let Some(line) = lines.next_line().await? {
-        if line.trim().is_empty() {
-            continue;
-        }
-        let reply = match serde_json::from_str::<Value>(&line) {
-            Ok(message) => handle(&caller, &message).await,
-            Err(e) => Some(rpc_error(
-                &Value::Null,
-                PARSE_ERROR,
-                &format!("invalid JSON: {e}"),
-            )),
-        };
-        if let Some(reply) = reply {
-            let mut text = reply.to_string();
-            text.push('\n');
+        if let Some(text) = stdio_reply(&caller, &line).await {
             stdout.write_all(text.as_bytes()).await?;
             stdout.flush().await?;
         }

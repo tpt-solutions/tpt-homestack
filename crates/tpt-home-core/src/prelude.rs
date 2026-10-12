@@ -15,7 +15,9 @@ pub use crate::db::DbPool;
 pub use crate::error::ApiError;
 pub use crate::middleware;
 pub use crate::migrate::{self, MigrationEntry};
-pub use crate::registry::{self, Blueprint, BlueprintEntry, RouteEntry, StartupEntry, UiEntry};
+pub use crate::registry::{
+    self, Blueprint, BlueprintEntry, JobEntry, RouteEntry, StartupEntry, UiEntry,
+};
 
 // axum pieces blueprint handlers touch daily.
 pub use axum::Json;

@@ -130,3 +130,8 @@ pub async fn delete(
     user::delete_user(&db, id).await?;
     Ok(Json(json!({ "ok": true })))
 }
+
+/// GET /api/admin/jobs: each scheduled job's last run, outcome and next run.
+pub async fn jobs() -> Json<Vec<registry::JobStatus>> {
+    Json(registry::job_statuses())
+}

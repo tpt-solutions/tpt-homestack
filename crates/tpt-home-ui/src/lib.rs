@@ -111,14 +111,17 @@ fn sidebar(nav: &[(String, String)], active: &str, user: &UserView) -> String {
         links.push_str(&format!("<a href=\"{path}\"{class}>{}</a>\n", esc(label)));
     }
     if user.role == "admin" {
-        let class = if active == "/admin/users" {
-            " class=\"active\""
-        } else {
-            ""
-        };
-        links.push_str(&format!(
-            "<a href=\"/admin/users\"{class}>Admin · Users</a>\n"
-        ));
+        for (path, label) in [
+            ("/admin/users", "Admin · Users"),
+            ("/admin/jobs", "Admin · Jobs"),
+        ] {
+            let class = if active == path {
+                " class=\"active\""
+            } else {
+                ""
+            };
+            links.push_str(&format!("<a href=\"{path}\"{class}>{label}</a>\n"));
+        }
     }
     links.push_str("</nav>");
     format!(

@@ -84,18 +84,58 @@ Create the token and package the plugin:
 ```sh
 tpt-home token create admin --name ticker-process --scope plugin:ticker
 tpt-home plugin build docs/examples/external-python        # writes ticker-0.1.0.tptp
-# Install through the admin API (the CLI install command is not implemented yet):
-curl -H "Authorization: Bearer $ADMIN_TOKEN" -F approve=db -F package=@ticker-0.1.0.tptp      http://127.0.0.1:8080/api/plugins/install
-curl -X POST -H "Content-Type: application/json" -H "Authorization: Bearer $ADMIN_TOKEN"      -d '{}' http://127.0.0.1:8080/api/plugins/ticker/enable
+tpt-home plugin install ticker-0.1.0.tptp --approve db --enable
+```
+
+`plugin install` grants only the permissions named in `--approve`. Without
+`--enable`, a new plugin installs disabled, and an upgrade keeps its current
+state. `plugin enable|disable <id>` change the state, and `plugin remove <id>`
+uninstalls it. Removing drops the plugin's data, so it needs `--yes`, or
+`--keep-data` to keep the data.
+
+The CLI writes to the database, but a running server loads plugins only at
+startup. Restart the server after a CLI change, or use the admin API for an
+immediate change:
+
+```sh
+curl -H "Authorization: Bearer $ADMIN_TOKEN" -F approve=db -F package=@ticker-0.1.0.tptp http://127.0.0.1:8080/api/plugins/install
+curl -X POST -H "Authorization: Bearer $ADMIN_TOKEN" http://127.0.0.1:8080/api/plugins/ticker/enable
 ```
 
 A working example is in [`examples/external-python/`](examples/external-python/).
 It is a single Python file using only the standard library. It stores labels
 in its own table and is covered by an end-to-end run.
 
-Tokens are issued by `tpt-home token`, not by plugins. A token can reach only
-the routes its scope names, and it is refused with `403` anywhere else. See
-the API token section of the docs.
+## API tokens and MCP
+
+Tokens are issued by `tpt-home token`, never by plugins:
+
+```sh
+tpt-home token create alice --name agent --scope api --scope plugin:ticker --days 30
+tpt-home token list --username alice
+tpt-home token revoke 3
+```
+
+The secret is printed once. Tokens are stored hashed and expire if you give
+`--days`. A token acts as its owner, so its permissions are the owner's. Its
+scopes narrow that further: `api` covers the JSON API, `plugin:<id>` covers
+one plugin's routes and host services. Anything outside the scopes returns
+`403`, and a revoked or expired token returns `401`.
+
+Plugins are exposed to AI agents over MCP. The tools are `plugins_list`,
+`plugin_call` and the form actions declared in plugin manifests. Two transports
+exist:
+
+- Streamable HTTP at `POST /api/mcp` with `Authorization: Bearer <token>`.
+  Request and response are JSON only; there is no SSE streaming.
+- Stdio, for a local agent: `tpt-home mcp --token <token>`, or set
+  `TPT_HOME_MCP_TOKEN`. Logs go to stderr, so stdout carries only protocol
+  lines.
+
+Both transports apply the token's scopes and the plugin's approved
+permissions. Calls go through the plugin dispatcher, not the HTTP router, so
+blueprint routes are not exposed as tools yet. The HTTP transport uses the
+server's global rate limit; the stdio transport has none.
 
 ## JS script plugins (`runtime = "js"`)
 

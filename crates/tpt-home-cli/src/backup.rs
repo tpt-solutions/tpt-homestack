@@ -62,6 +62,42 @@ pub async fn backup(cfg: &Config, out_dir: Option<PathBuf>) -> anyhow::Result<()
     Ok(())
 }
 
+/// Refuse a file that is not a tpt-home database. Opened read-only, so the
+/// check leaves no WAL or journal files next to the backup.
+async fn check_backup(path: &Path) -> anyhow::Result<()> {
+    let opts = sqlx::sqlite::SqliteConnectOptions::new()
+        .filename(path)
+        .read_only(true);
+    let pool = sqlx::sqlite::SqlitePoolOptions::new()
+        .max_connections(1)
+        .connect_with(opts)
+        .await
+        .with_context(|| format!("{} is not a readable database", path.display()))?;
+
+    let integrity: String = sqlx::query_scalar("PRAGMA quick_check")
+        .fetch_one(&pool)
+        .await
+        .with_context(|| format!("{} is not a SQLite database", path.display()))?;
+    anyhow::ensure!(
+        integrity == "ok",
+        "{} failed its integrity check: {integrity}",
+        path.display()
+    );
+
+    let users: i64 = sqlx::query_scalar(
+        "SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name = 'users'",
+    )
+    .fetch_one(&pool)
+    .await?;
+    pool.close().await;
+    anyhow::ensure!(
+        users == 1,
+        "{} is not a tpt-home backup (no users table)",
+        path.display()
+    );
+    Ok(())
+}
+
 /// `tpt-home restore` — replace the live database (and optionally uploads)
 /// from a backup. The server must be stopped; we do the swap via a temp file
 /// + rename so a crash cannot corrupt the live database.
@@ -69,6 +105,8 @@ pub async fn restore(cfg: &Config, backup_db: &Path, yes: bool) -> anyhow::Resul
     if !backup_db.is_file() {
         anyhow::bail!("backup not found: {}", backup_db.display());
     }
+    // Check the file before it can replace the live database.
+    check_backup(backup_db).await?;
     if !yes {
         println!(
             "This overwrites {} (and restores uploads if present next to the backup). Continue? [y/N]",
@@ -85,6 +123,14 @@ pub async fn restore(cfg: &Config, backup_db: &Path, yes: bool) -> anyhow::Resul
     let live = cfg.db_path();
     let tmp = live.with_extension("db.restore-tmp");
     std::fs::copy(backup_db, &tmp).with_context(|| "copying backup")?;
+    // The live database runs in WAL mode. A leftover write-ahead log would be
+    // replayed on top of the restored file, so drop the sidecars first.
+    for sidecar in ["-wal", "-shm"] {
+        let path = PathBuf::from(format!("{}{sidecar}", live.display()));
+        if path.exists() {
+            std::fs::remove_file(&path).with_context(|| format!("removing {}", path.display()))?;
+        }
+    }
     std::fs::rename(&tmp, &live).with_context(|| "swapping live database")?;
 
     let backup_uploads = backup_db.parent().unwrap_or(Path::new(".")).join("uploads");

@@ -19,9 +19,9 @@ use tpt_home_core::config::Config;
 /// rest of the binary never calls. Taking the address of each blueprint's
 /// `__link_anchor` keeps its registration object (routes, migrations, UI,
 /// startup tasks) in the binary. Add an entry for every compiled-in
-/// blueprint.
+/// blueprint; `tpt-home new` does this for the blueprints it creates.
 #[allow(dead_code)]
-static BLUEPRINT_LINK_ANCHORS: [fn() -> &'static str; 5] = [
+static BLUEPRINT_LINK_ANCHORS: &[fn() -> &'static str] = &[
     tpt_home_bp_notes::__link_anchor,
     tpt_home_bp_drop::__link_anchor,
     tpt_home_bp_track::__link_anchor,
@@ -69,6 +69,9 @@ enum Command {
     New {
         /// Blueprint id (lowercase letters/digits/underscore).
         name: String,
+        /// Starter code to generate.
+        #[arg(long, value_enum, default_value_t = scaffold::Template::Basic)]
+        template: scaffold::Template,
     },
     /// Manage user accounts.
     User {
@@ -176,9 +179,31 @@ enum PluginCmd {
         #[arg(long)]
         out: Option<std::path::PathBuf>,
     },
-    /// Install a `.tptp` package. Not yet implemented here: install through
-    /// the admin API (`POST /api/plugins/install`).
-    Install { path: std::path::PathBuf },
+    /// Install a `.tptp` package. Same rules as `POST /api/plugins/install`:
+    /// only the permissions in `--approve` are granted.
+    Install {
+        path: std::path::PathBuf,
+        /// Comma-separated permissions to approve, e.g. `db,kv`.
+        #[arg(long, default_value = "")]
+        approve: String,
+        /// Enable after install. Without it, an upgrade keeps the current state.
+        #[arg(long)]
+        enable: bool,
+    },
+    /// Enable an installed plugin.
+    Enable { id: String },
+    /// Disable an installed plugin. Its data is kept.
+    Disable { id: String },
+    /// Uninstall a plugin. Dropping its data needs `--yes`.
+    Remove {
+        id: String,
+        /// Keep the plugin's data tables and key/value entries.
+        #[arg(long)]
+        keep_data: bool,
+        /// Confirm dropping the plugin's data (not needed with `--keep-data`).
+        #[arg(long)]
+        yes: bool,
+    },
 }
 
 fn random_password() -> String {
@@ -213,7 +238,7 @@ async fn main() -> anyhow::Result<()> {
             }
             tpt_home_api::serve(cfg).await
         }
-        Command::New { name } => scaffold::new_blueprint(&name),
+        Command::New { name, template } => scaffold::new_blueprint(&name, template),
         Command::User { cmd } => user_cmd(cli.data_dir, cmd).await,
         Command::Token { cmd } => token_cmd(cli.data_dir, cmd).await,
         Command::Mcp { token } => mcp_cmd(cli.data_dir, token).await,
@@ -231,26 +256,6 @@ async fn main() -> anyhow::Result<()> {
             Ok(())
         }
         Command::Plugin { cmd } => match cmd {
-            PluginCmd::List => {
-                let cfg = load_config(cli.data_dir)?;
-                let dir = cfg.data_dir.join("plugins");
-                if dir.is_dir() {
-                    let mut found = false;
-                    for entry in std::fs::read_dir(&dir)? {
-                        let p = entry?.path();
-                        if p.extension().is_some_and(|e| e == "tptp") {
-                            println!("{}", p.display());
-                            found = true;
-                        }
-                    }
-                    if !found {
-                        println!("no plugins installed in {}", dir.display());
-                    }
-                } else {
-                    println!("no plugins directory at {}", dir.display());
-                }
-                Ok(())
-            }
             PluginCmd::Build { dir, out } => {
                 let manifest = tpt_home_plugins::manifest::from_dir(&dir)?;
                 let package = tpt_home_plugins::package::pack(&dir)?;
@@ -264,12 +269,95 @@ async fn main() -> anyhow::Result<()> {
                 println!("wrote {} ({} bytes)", out.display(), package.bytes.len());
                 Ok(())
             }
-            PluginCmd::Install { .. } => {
-                anyhow::bail!(
-                    "CLI install is not implemented yet; upload the package with POST /api/plugins/install (admin)"
-                )
-            }
+            cmd => plugin_admin(cli.data_dir, cmd).await,
         },
+    }
+}
+
+/// `plugin install|enable|disable|remove`. These write to the database, which
+/// is the server's source of truth, but the server keeps plugins in memory and
+/// loads them at startup. A running server picks up the change on restart; use
+/// the admin API for an immediate change.
+async fn plugin_admin(data_dir: Option<std::path::PathBuf>, cmd: PluginCmd) -> anyhow::Result<()> {
+    use tpt_home_plugins::{lifecycle, manifest::Permissions};
+
+    let cfg = load_config(data_dir)?;
+    let db = tpt_home_api::init_server(cfg).await?;
+    // Enable needs the plugin loaded in this process; the others do not.
+    lifecycle::load_installed(&db).await?;
+
+    match cmd {
+        PluginCmd::Install {
+            path,
+            approve,
+            enable,
+        } => {
+            let archive = std::fs::read(&path)?;
+            let granted = Permissions::parse_list(&approve).map_err(anyhow::Error::msg)?;
+            let (staged, manifest) = lifecycle::stage_package(&archive)?;
+            // Same default as the admin API: an upgrade keeps its current state.
+            let enable = if enable {
+                true
+            } else {
+                lifecycle::is_enabled(&db, &manifest.plugin.id).await?
+            };
+            let installed = match lifecycle::install_from_dir(&db, &staged, enable, &granted).await
+            {
+                Ok(installed) => installed,
+                Err(e) => {
+                    let _ = std::fs::remove_dir_all(&staged);
+                    return Err(e);
+                }
+            };
+            let effective = granted.intersect(&installed.permissions);
+            println!(
+                "installed {} {} (enabled: {enable}, approved: {})",
+                installed.plugin.id,
+                installed.plugin.version,
+                effective.to_json()
+            );
+            Ok(())
+        }
+        PluginCmd::Enable { id } => {
+            lifecycle::enable(&db, &id).await?;
+            println!("enabled {id}");
+            Ok(())
+        }
+        PluginCmd::Disable { id } => {
+            lifecycle::disable(&db, &id).await?;
+            println!("disabled {id}");
+            Ok(())
+        }
+        PluginCmd::Remove { id, keep_data, yes } => {
+            if !keep_data && !yes {
+                anyhow::bail!(
+                    "removing {id} drops its data; pass --keep-data to keep it, or --yes to drop it"
+                );
+            }
+            let dropped = lifecycle::uninstall(&db, &id, keep_data).await?;
+            if keep_data {
+                println!("removed {id} (data kept)");
+            } else {
+                println!("removed {id} (dropped {dropped} table(s) and its key/value entries)");
+            }
+            Ok(())
+        }
+        PluginCmd::List => {
+            let rows: Vec<(String, String, String, bool, String)> = sqlx::query_as(
+                "SELECT id, name, version, enabled, approved_permissions FROM plugins ORDER BY id",
+            )
+            .fetch_all(&db)
+            .await?;
+            if rows.is_empty() {
+                println!("no plugins installed");
+            }
+            for (id, name, version, enabled, approved) in rows {
+                let state = if enabled { "enabled" } else { "disabled" };
+                println!("{id} {version} ({name}) {state} approved={approved}");
+            }
+            Ok(())
+        }
+        PluginCmd::Build { .. } => unreachable!("handled in main"),
     }
 }
 

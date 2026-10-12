@@ -9,6 +9,7 @@
 //! | `#[bp_migration]` | `const X: &str` | Registers a namespaced SQL migration |
 //! | `#[bp_route(method, path, role?)]` | async fn | Registers an API route under `/api/` |
 //! | `#[bp_ui_route(path, name?)]` | fn | Registers a UI page + sidebar entry |
+//! | `#[bp_job(every = "5m")]` | async fn | Runs the function periodically in the background |
 //!
 //! All registration goes through `inventory`, so the server discovers
 //! everything at startup with zero manual wiring. Compile-time checks live
@@ -18,6 +19,7 @@
 use proc_macro::TokenStream;
 use quote::quote;
 use syn::parse::{Parse, ParseStream};
+use syn::spanned::Spanned;
 use syn::{Ident, ItemConst, ItemFn, ItemStruct, LitStr, Token, parse_macro_input};
 
 /// Key/value attribute args: `key = "value", ...`.
@@ -375,4 +377,119 @@ pub fn bp_ui_route(attr: TokenStream, item: TokenStream) -> TokenStream {
         }
     };
     expanded.into()
+}
+
+/// Register a periodic job: `#[bp_job(every = "5m")]` on
+/// `async fn name(db: DbPool) -> Result<(), ApiError>`.
+///
+/// `every` takes a number and a unit: `s`, `m`, `h` or `d` (minimum `10s`).
+/// The job runs one period after boot, then once per period. Optional
+/// `name = "..."` overrides the log name (default: the function name), and
+/// `timeout = "..."` caps one run (default `5m`); a run over the cap is aborted.
+#[proc_macro_attribute]
+pub fn bp_job(attr: TokenStream, item: TokenStream) -> TokenStream {
+    let args = parse_macro_input!(attr as KvArgs);
+    let item = parse_macro_input!(item as ItemFn);
+
+    let Some(every) = args.get("every") else {
+        return syn::Error::new(
+            proc_macro2::Span::call_site(),
+            "missing `every = \"...\"` in #[bp_job], e.g. every = \"5m\"",
+        )
+        .to_compile_error()
+        .into();
+    };
+    let every_secs = match parse_every(&every.value()) {
+        Ok(secs) => secs,
+        Err(msg) => return syn::Error::new(every.span(), msg).to_compile_error().into(),
+    };
+    let timeout_secs = match args.get("timeout") {
+        Some(text) => match parse_every(&text.value()) {
+            Ok(secs) => secs,
+            Err(msg) => return syn::Error::new(text.span(), msg).to_compile_error().into(),
+        },
+        None => DEFAULT_JOB_TIMEOUT_SECS,
+    };
+    if item.sig.asyncness.is_none() {
+        return syn::Error::new(item.sig.span(), "#[bp_job] functions must be `async`")
+            .to_compile_error()
+            .into();
+    }
+
+    let fn_ident = &item.sig.ident;
+    let job_name = args
+        .get("name")
+        .map(LitStr::value)
+        .unwrap_or_else(|| fn_ident.to_string());
+
+    let expanded = quote! {
+        #item
+
+        tpt_home_core::inventory::submit! {
+            tpt_home_core::JobEntry {
+                blueprint: env!("CARGO_PKG_NAME"),
+                name: #job_name,
+                every: ::std::time::Duration::from_secs(#every_secs),
+                timeout: ::std::time::Duration::from_secs(#timeout_secs),
+                run: |db| ::std::boxed::Box::pin(#fn_ident(db)),
+            }
+        }
+    };
+    expanded.into()
+}
+
+/// Per-run cap for `#[bp_job]` when no `timeout` is given.
+const DEFAULT_JOB_TIMEOUT_SECS: u64 = 300;
+
+/// Parse `"30s"`, `"5m"`, `"1h"` or `"1d"` into seconds. Minimum 10 seconds
+/// so a typo cannot turn a job into a busy loop.
+fn parse_every(text: &str) -> Result<u64, String> {
+    let text = text.trim();
+    let (digits, unit) = text.split_at(text.len().saturating_sub(1));
+    let multiplier = match unit {
+        "s" => 1,
+        "m" => 60,
+        "h" => 3_600,
+        "d" => 86_400,
+        _ => {
+            return Err(format!(
+                "invalid interval '{text}': unit must be s, m, h or d"
+            ));
+        }
+    };
+    let count: u64 = digits
+        .parse()
+        .map_err(|_| format!("invalid interval '{text}': expected a number before the unit"))?;
+    let secs = count
+        .checked_mul(multiplier)
+        .ok_or_else(|| format!("interval '{text}' is too large"))?;
+    if secs < 10 {
+        return Err(format!("interval '{text}' is too short: minimum is 10s"));
+    }
+    Ok(secs)
+}
+
+#[cfg(test)]
+mod job_tests {
+    use super::parse_every;
+
+    #[test]
+    fn intervals_parse_to_seconds() {
+        assert_eq!(parse_every("30s"), Ok(30));
+        assert_eq!(parse_every("5m"), Ok(300));
+        assert_eq!(parse_every("1h"), Ok(3_600));
+        assert_eq!(parse_every("1d"), Ok(86_400));
+        assert_eq!(parse_every(" 2h "), Ok(7_200));
+    }
+
+    #[test]
+    fn bad_intervals_are_rejected() {
+        assert!(parse_every("").is_err());
+        assert!(parse_every("5").is_err());
+        assert!(parse_every("m").is_err());
+        assert!(parse_every("5x").is_err());
+        assert!(parse_every("9s").is_err());
+        assert!(parse_every("0m").is_err());
+        assert!(parse_every("99999999999999999999d").is_err());
+    }
 }

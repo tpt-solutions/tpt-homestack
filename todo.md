@@ -141,11 +141,11 @@ Four tiers sharing one manifest + capability model: JS scripts (Boa), WASM (Rust
 - [ ] Execute tool calls through the in-process router with role enforcement (`Role::allows`) and rate limiting; never expose public routes — PARTIAL: calls go through invoke_plugin, not the router; auth, token scope and plugin permissions apply; rate limiting is the HTTP server's global limit, not per tool; stdio is not rate limited
 - [x] `docs/AI_PLUGIN_GUIDE.md` so an AI agent can write sandboxed JS plugins
 - [ ] Optional: admin-only `plugin_install` MCP tool with a human approval step — NOT DONE (optional)
-- [ ] MCP tests: scripted JSON-RPC sessions over stdio and HTTP; non-admin token cannot call admin tools — PARTIAL: 9 in-process protocol and authorization tests, plus manual live runs of stdio and HTTP; no automated transport test
+- [ ] MCP tests: scripted JSON-RPC sessions over stdio and HTTP; non-admin token cannot call admin tools — PARTIAL: 14 automated tests: protocol and authorization, the stdio line framing (`stdio_reply`, incl. bad-JSON recovery) and the HTTP endpoint (`http_router`, status codes and token scope). Not yet: a spawned `tpt-home mcp` process fed a scripted stdin session, and a live-router test through the auth guard
 
 ### F. Housekeeping
-- [ ] Update `docs/PLUGINS.md` for the new runtimes, tokens and MCP
-- [ ] `cargo deny check` for every new dependency
+- [x] Update `docs/PLUGINS.md` for the new runtimes, tokens and MCP — added an "API tokens and MCP" section (token CLI, scopes, 401/403, both MCP transports)
+- [x] `cargo deny check` for every new dependency — advisories, bans, licenses and sources all pass on the current graph
 
 ## Phase 5 — Official Blueprints
 ### `tpt-home-bp-notes`
@@ -177,13 +177,30 @@ Four tiers sharing one manifest + capability model: JS scripts (Boa), WASM (Rust
 - [x] `tpt-home run`
 - [x] `tpt-home new <name>` scaffold (Cargo.toml, lib.rs using macros, workspace registration; verified compiling)
 - [ ] `tpt-home new --plugin <name>` scaffold for WASM plugins
-- [ ] `tpt-home plugin build|install|list|enable|disable|remove`
+- [x] `tpt-home plugin build|install|list|enable|disable|remove` — `list` reads the plugins table; `install` takes `--approve` and `--enable` and matches the admin API; `remove` needs `--yes` unless `--keep-data`; verified by a live smoke run (the CLI writes the DB, so a running server picks up changes on restart)
 - [x] `tpt-home user add|list|remove|reset-password`
 - [x] `tpt-home backup` / `restore` (`VACUUM INTO` + uploads copy, atomic swap on restore)
 - [x] Shell completions (bash, zsh, fish, powershell, elvish)
 - [x] `scripts/install.sh` systemd installer (user, hardened unit file, enable/start)
 - [x] Windows install script (`scripts/install.ps1`, logon Scheduled Task; script written, task registration not exercised here)
-- [ ] CLI integration tests
+- [ ] CLI integration tests — PARTIAL: `tests/plugin_cli.rs` and `tests/admin_cli.rs` run the real binary for `plugin`, `user`, `token`, `backup` and `restore` (13 tests); `migrate`, `run` and `new` are not covered yet
+
+## Phase 5b — Automation and Data I/O
+- [x] Scheduled-job hook: `#[bp_job(every = "5m")]` on `async fn(DbPool) -> Result<(), ApiError>`; `JobEntry` registry with one loop per job, each run in its own task so errors are logged and panics contained; first run one period after boot; interval checked at compile time (`s`/`m`/`h`/`d`, minimum 10s). Verified by loop tests (repeat, error, panic) and interval-parser tests, and live: a 10s job in a scratch blueprint wrote rows at 10, 20 and 30s
+- [x] Job visibility: admin page `/admin/jobs` (sidebar "Admin · Jobs") and `GET /api/admin/jobs` (admin only) show each job's period, timeout, last start and finish, last outcome and error, next run, runs and failures. Status is kept in memory, so it resets on restart. Verified live: the Drop cleanup job's first run was recorded as `ok`, and viewers and anonymous callers were refused
+- [x] Job timeout: `#[bp_job(timeout = "...")]`, default 5 minutes. A run over its cap is aborted and logged; runs never overlap because the next tick waits for the current run. Tested with a run that never returns; the job keeps running
+- [x] Drop's expiry cleanup moved from `StartupEntry` to `#[bp_job(every = "1m")]`, so there is one scheduling mechanism. Behaviour change: the first sweep runs one minute after boot instead of immediately
+- [ ] `tpt-home new --template scheduled-job` (the job hook is now available)
+- [x] Webhook signature check (`tpt_home_core::webhook`): HMAC-SHA256 over `"<timestamp>.<body>"`, constant-time comparison, timestamp window against replays. Verified against RFC 4231 test vectors 1 and 6 and against tampered bodies, wrong secrets, stale and future timestamps, and malformed headers
+- [x] Webhook route and secret management: admin CRUD at `/api/webhooks` (secret shown once, `secret` never listed), public receiver `POST /api/hooks/{name}` verified with `webhook::verify` (window 5 min), bodies up to 64 KiB stored in `webhook_deliveries` (newest 200 kept). Verified live with 24 checks (signature, timestamps, unknown names, non-admin 403, duplicate 409, non-UTF-8, oversized, delete) and a 205-delivery retention check in the database
+- [ ] Webhook delivery to blueprint code: blueprints currently read `webhook_deliveries` themselves; a push hook (`#[bp_webhook]`) that calls a handler per accepted delivery is not built
+- [ ] Webhook replay protection inside the time window needs a nonce store; not built
+- [ ] Global rate limit (240 requests per 60 s per client, all routes) also applies to webhook senders; a bursty sender gets 429. Decide whether webhooks need their own limit
+- [x] Track CSV import and export: `GET /api/track/tables/{id}/export.csv` (RFC 4180, CRLF, header of field names) and `POST /api/track/tables/{id}/import` (`text/csv` body up to 1 MiB, 5000 rows max). Header maps columns case-insensitively, unknown or duplicate columns are refused, every cell is checked against its kind, and any bad row means nothing is saved (first 20 problems reported with line numbers). Verified with 19 live checks and a byte-identical export → import → export round trip. The content-type guard now also accepts `text/csv`; this is safe because HTML forms cannot send it and cross-origin requests need a preflight that is not granted
+- [x] Seven starter templates for `tpt-home new --template`: `basic`, `records`, `logbook`, `file-inbox`, `scheduled-job`, `dashboard`, `scheduled-fetch`. Multi-file layout (`templates/<kind>/src/`) with per-template extra dependencies. Verified together in one scratch workspace: all 10 blueprints linked, every API route exercised, admin-only routes return 401 anonymous and 403 for a user, pages render 200, job-driven rows appear on a 10s schedule, file upload/download/delete round-trips byte for byte, no panics or job failures in the log
+- [x] CI job `templates` (`scripts/check-templates.sh`) scaffolds every template into a temp copy of the tree, checks each generated crate and builds the CLI that links them all; runs under the CI `-D warnings` setting. Passes locally in about 2 minutes
+- [ ] Home security and automation blueprint (`sensor-alerts`): store sensor events posted with an API token, run rules in a `#[bp_job]` (door open after 23:00, no motion for 24h, sensor silent), record alerts. Depends on the webhook route and an outbound notification channel. Not a substitute for a certified alarm system, and it has no device integrations of its own (cameras, Zigbee/Z-Wave, MQTT would come through external plugins)
+- [x] Template scaffold: `scheduled-fetch` pulls in reqwest (rustls). `cargo deny check` passes on the scratch workspace that includes the generated crate (advisories, bans, licenses, sources). The repo's own CI deny job covers only the repo graph, so generated crates still need a manual check
 
 ## Phase 7 — Deployment & Platform Support
 - [x] `docker-compose.yml` (Caddy + Cloudflared only)

@@ -70,3 +70,25 @@ inventory::submit! {
         "#,
     }
 }
+
+inventory::submit! {
+    MigrationEntry {
+        key: "tpt-home-core:005_webhooks",
+        sql: r#"
+            CREATE TABLE IF NOT EXISTS webhooks (
+                id               INTEGER PRIMARY KEY,
+                name             TEXT    NOT NULL UNIQUE,
+                secret           TEXT    NOT NULL,
+                created_at       INTEGER NOT NULL,
+                last_received_at INTEGER
+            );
+            CREATE TABLE IF NOT EXISTS webhook_deliveries (
+                id          INTEGER PRIMARY KEY,
+                webhook_id  INTEGER NOT NULL REFERENCES webhooks(id) ON DELETE CASCADE,
+                received_at INTEGER NOT NULL,
+                body        TEXT    NOT NULL
+            );
+            CREATE INDEX IF NOT EXISTS idx_webhook_deliveries ON webhook_deliveries(webhook_id, id);
+        "#,
+    }
+}

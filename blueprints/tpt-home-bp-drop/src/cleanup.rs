@@ -1,9 +1,8 @@
 // SPDX-License-Identifier: MIT OR Apache-2.0
 // Copyright (c) 2026 TPT Solutions
 
-//! Cron-style expiry cleanup. Registered via `StartupEntry`; the server
-//! spawns it once at boot. A crashed task must never take the server down —
-//! the loop only logs errors.
+//! Expiry cleanup. The sweep runs from a `#[bp_job]` in `lib.rs` once a
+//! minute; a failed sweep is logged by the job runner and retried next tick.
 
 use tpt_home_core::db::DbPool;
 use tpt_home_core::files;
@@ -34,20 +33,6 @@ pub async fn sweep(db: &DbPool) -> Result<u32, tpt_home_core::ApiError> {
         tracing::debug!(count = expired.len(), "drop: expired files removed");
     }
     Ok(expired.len() as u32)
-}
-
-/// Spawn the 60-second cleanup loop onto the current runtime.
-pub fn spawn_cleanup_loop(db: DbPool) {
-    tokio::spawn(async move {
-        let mut ticker = tokio::time::interval(std::time::Duration::from_secs(60));
-        ticker.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
-        loop {
-            ticker.tick().await;
-            if let Err(e) = sweep(&db).await {
-                tracing::warn!(error = ?e, "drop cleanup sweep failed");
-            }
-        }
-    });
 }
 
 fn upload_dir() -> std::path::PathBuf {

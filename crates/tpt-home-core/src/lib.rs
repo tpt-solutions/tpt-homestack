@@ -21,6 +21,7 @@ pub mod migrate;
 pub mod migrations;
 pub mod prelude;
 pub mod registry;
+pub mod webhook;
 
 // Convenience re-exports at the crate root.
 pub use error::ApiError;
@@ -30,7 +31,7 @@ pub use inventory;
 pub use middleware::RateLimiter;
 pub use migrate::MigrationEntry;
 pub use registry::{
-    Blueprint, BlueprintEntry, PublicRouteEntry, RouteEntry, StartupEntry, UiEntry,
+    Blueprint, BlueprintEntry, JobEntry, PublicRouteEntry, RouteEntry, StartupEntry, UiEntry,
 };
 
 /// Crate version, as reported by `/healthz`.
