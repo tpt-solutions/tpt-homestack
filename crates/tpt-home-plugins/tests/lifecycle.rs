@@ -70,6 +70,11 @@ fn valid_wasm() -> Vec<u8> {
     VALID_WASM.as_bytes().to_vec()
 }
 
+/// The admin approves everything the fixtures request.
+fn grant_all() -> tpt_home_plugins::manifest::Permissions {
+    tpt_home_plugins::manifest::Permissions::parse_list("db,kv,storage").unwrap()
+}
+
 /// A migrated database. Server startup creates the plugins directory; tests do
 /// the same, since install renames packages into it.
 async fn fresh_db() -> tpt_home_core::db::DbPool {
@@ -105,12 +110,12 @@ async fn break_plugin_rows(db: &tpt_home_core::db::DbPool) {
 async fn install_then_upgrade_replaces_the_package() {
     let db = fresh_db().await;
     let id = "upgradeok";
-    lifecycle::install_from_dir(&db, &stage(id, "0.1.0", &valid_wasm()), true)
+    lifecycle::install_from_dir(&db, &stage(id, "0.1.0", &valid_wasm()), true, &grant_all())
         .await
         .unwrap();
     assert_eq!(registry::get(id).unwrap().manifest.plugin.version, "0.1.0");
 
-    lifecycle::install_from_dir(&db, &stage(id, "0.2.0", &valid_wasm()), true)
+    lifecycle::install_from_dir(&db, &stage(id, "0.2.0", &valid_wasm()), true, &grant_all())
         .await
         .unwrap();
     assert_eq!(registry::get(id).unwrap().manifest.plugin.version, "0.2.0");
@@ -125,12 +130,14 @@ async fn install_then_upgrade_replaces_the_package() {
 async fn failed_upgrade_restores_the_previous_package() {
     let db = fresh_db().await;
     let id = "upgradefail";
-    lifecycle::install_from_dir(&db, &stage(id, "0.1.0", &valid_wasm()), true)
+    lifecycle::install_from_dir(&db, &stage(id, "0.1.0", &valid_wasm()), true, &grant_all())
         .await
         .unwrap();
 
     break_plugin_rows(&db).await;
-    let err = lifecycle::install_from_dir(&db, &stage(id, "0.2.0", &valid_wasm()), true).await;
+    let err =
+        lifecycle::install_from_dir(&db, &stage(id, "0.2.0", &valid_wasm()), true, &grant_all())
+            .await;
     assert!(err.is_err(), "the forced failure must surface");
 
     // The loaded plugin and the package on disk are still version 0.1.0.
@@ -152,7 +159,7 @@ async fn failed_fresh_install_leaves_nothing_behind() {
     let id = "freshfail";
     break_plugin_rows(&db).await;
     assert!(
-        lifecycle::install_from_dir(&db, &stage(id, "0.1.0", &valid_wasm()), true)
+        lifecycle::install_from_dir(&db, &stage(id, "0.1.0", &valid_wasm()), true, &grant_all())
             .await
             .is_err()
     );
@@ -172,7 +179,9 @@ async fn failed_fresh_install_leaves_nothing_behind() {
 async fn uncompilable_package_is_rejected_before_anything_changes() {
     let db = fresh_db().await;
     let id = "badwasm";
-    let err = lifecycle::install_from_dir(&db, &stage(id, "0.1.0", b"not wasm"), true).await;
+    let err =
+        lifecycle::install_from_dir(&db, &stage(id, "0.1.0", b"not wasm"), true, &grant_all())
+            .await;
     assert!(err.is_err());
     assert!(registry::get(id).is_none());
     assert!(!table_exists(&db, &format!("{id}_items")).await);
@@ -182,9 +191,14 @@ async fn uncompilable_package_is_rejected_before_anything_changes() {
 async fn uninstall_keeps_or_drops_tables_as_asked() {
     let db = fresh_db().await;
     let keep = "keepdata";
-    lifecycle::install_from_dir(&db, &stage(keep, "0.1.0", &valid_wasm()), true)
-        .await
-        .unwrap();
+    lifecycle::install_from_dir(
+        &db,
+        &stage(keep, "0.1.0", &valid_wasm()),
+        true,
+        &grant_all(),
+    )
+    .await
+    .unwrap();
     lifecycle::uninstall(&db, keep, true).await.unwrap();
     assert!(registry::get(keep).is_none());
     assert!(
@@ -193,13 +207,47 @@ async fn uninstall_keeps_or_drops_tables_as_asked() {
     );
 
     let drop = "dropdata";
-    lifecycle::install_from_dir(&db, &stage(drop, "0.1.0", &valid_wasm()), true)
-        .await
-        .unwrap();
+    lifecycle::install_from_dir(
+        &db,
+        &stage(drop, "0.1.0", &valid_wasm()),
+        true,
+        &grant_all(),
+    )
+    .await
+    .unwrap();
     let dropped = lifecycle::uninstall(&db, drop, false).await.unwrap();
     assert!(dropped >= 1);
     assert!(
         !table_exists(&db, &format!("{drop}_items")).await,
         "data removed"
     );
+}
+
+#[tokio::test]
+async fn a_plugin_installed_without_a_grant_has_no_capabilities() {
+    let db = fresh_db().await;
+    let id = "nogrant";
+    // The manifest asks for db; the admin approves nothing.
+    lifecycle::install_from_dir(
+        &db,
+        &stage(id, "0.1.0", &valid_wasm()),
+        true,
+        &tpt_home_plugins::manifest::Permissions::default(),
+    )
+    .await
+    .unwrap();
+    let plugin = registry::get(id).unwrap();
+    assert!(plugin.manifest.permissions.db, "requested");
+    assert!(
+        !plugin.effective_permissions().db,
+        "not approved, so denied"
+    );
+
+    let stored: (String,) =
+        sqlx::query_as("SELECT approved_permissions FROM plugins WHERE id = ?1")
+            .bind(id)
+            .fetch_one(&db)
+            .await
+            .unwrap();
+    assert_eq!(stored.0, "[]");
 }

@@ -93,7 +93,7 @@ Denied or failed calls never throw. Check for `null`/`false`.
 
 ```sh
 tpt-home plugin build my-plugin                  # writes notes_quick-0.1.0.tptp
-curl -H "Authorization: Bearer $ADMIN_TOKEN" -F package=@notes_quick-0.1.0.tptp \
+curl -H "Authorization: Bearer $ADMIN_TOKEN" -F approve=db -F package=@notes_quick-0.1.0.tptp \
      http://127.0.0.1:8080/api/plugins/install
 curl -X POST -H "Content-Type: application/json" -H "Authorization: Bearer $ADMIN_TOKEN" \
      -d '{}' http://127.0.0.1:8080/api/plugins/notes_quick/enable

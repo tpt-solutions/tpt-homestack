@@ -77,6 +77,7 @@ pub async fn install_from_dir(
     db: &SqlitePool,
     staged_dir: &Path,
     enable: bool,
+    granted: &Permissions,
 ) -> Result<PluginManifest, anyhow::Error> {
     let manifest = manifest::from_dir(staged_dir)?;
     let backend = load_backend(staged_dir, &manifest)?;
@@ -103,9 +104,9 @@ pub async fn install_from_dir(
     }
     std::fs::rename(staged_dir, &dest)?;
 
-    // Install-time approval: the admin is shown the manifest's request and
-    // the grant is recorded here. Runtime enforces the intersection.
-    let approved = manifest.permissions.clone();
+    // Install-time approval: the admin names what to grant. Only what the
+    // manifest requests can be approved, and runtime enforces the intersection.
+    let approved = granted.intersect(&manifest.permissions);
     let applied = async {
         create_manifest_tables(db, &manifest).await?;
         sqlx::query(
@@ -317,6 +318,15 @@ pub async fn load_installed(db: &SqlitePool) -> Result<usize, anyhow::Error> {
     }
     tracing::info!(loaded, "plugins loaded");
     Ok(loaded)
+}
+
+/// Whether an installed plugin is currently enabled. Unknown plugins are not.
+pub async fn is_enabled(db: &SqlitePool, id: &str) -> Result<bool, anyhow::Error> {
+    let row: Option<(bool,)> = sqlx::query_as("SELECT enabled FROM plugins WHERE id = ?1")
+        .bind(id)
+        .fetch_optional(db)
+        .await?;
+    Ok(row.is_some_and(|(enabled,)| enabled))
 }
 
 /// Enable a plugin (hot). Recreates manifest tables if missing.

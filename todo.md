@@ -81,7 +81,7 @@ Key decisions
 - [x] Define `plugin.toml` manifest (id, name, version, permissions, routes, pages, tables)
 - [x] Host functions: DB access (scoped to plugin-prefixed tables), key-value store, HTTP response helpers, logging
 - [x] Host functions: file access (scoped to a plugin directory) — only if permitted by the manifest
-- [ ] Permission model: plugins declare capabilities, admin approves on install
+- [x] Permission model: plugins declare capabilities, admin approves on install — install takes an `approve` list; anything not approved is denied at runtime (fail closed); install reports requested vs approved
 - [x] Sandbox limits: memory cap, fuel/instruction limit, timeouts
 - [ ] Plugin migrations (declared in the manifest, run by the host)
 - [x] Plugin API route dispatch (`/api/<plugin-id>/…` to the WASM handler)

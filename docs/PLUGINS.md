@@ -40,7 +40,7 @@ cargo build --release --target wasm32-unknown-unknown
 | Section | Purpose |
 |---|---|
 | `[plugin]` | `id` (lowercase, digits, underscore; namespaces routes and tables), `name`, `version`, `entry` (wasm or script file in the package, or the base URL for `external`), `api_version` (must be `1`), `runtime` (`wasm`, `js` with the `js` feature, or `external`) |
-| `[permissions]` | `db`, `kv`, `storage` — all default to denied. A capability is granted only when the manifest requests it **and** the admin approved it (`plugins.approved_permissions`). |
+| `[permissions]` | `db`, `kv`, `storage` — all default to denied. A capability is granted only when the manifest requests it **and** the admin approves it at install (`approve` form field, for example `approve=db,kv`). Anything not approved is refused at runtime, and the install response lists requested and approved. |
 | `[limits]` | `max_fuel` (instruction budget per call), `max_memory_mb`, `max_millis` (wall-clock budget per call, default 5000, checked at every host call) |
 | `[[tables]]` | Tables created as `<id>_<name>` at install; column kinds `text`, `integer`, `real`, `bool` |
 | `[[pages]]` | Declarative pages under `/plugins/<id><path>`: `kind = "table"` (rows from a scoped table) or `kind = "form"` (POSTs to the plugin API) |
@@ -84,7 +84,7 @@ Create the token and package the plugin:
 tpt-home token create admin --name ticker-process --scope plugin:ticker
 tpt-home plugin build docs/examples/external-python        # writes ticker-0.1.0.tptp
 # Install through the admin API (the CLI install command is not implemented yet):
-curl -H "Authorization: Bearer $ADMIN_TOKEN" -F package=@ticker-0.1.0.tptp      http://127.0.0.1:8080/api/plugins/install
+curl -H "Authorization: Bearer $ADMIN_TOKEN" -F approve=db -F package=@ticker-0.1.0.tptp      http://127.0.0.1:8080/api/plugins/install
 curl -X POST -H "Content-Type: application/json" -H "Authorization: Bearer $ADMIN_TOKEN"      -d '{}' http://127.0.0.1:8080/api/plugins/ticker/enable
 ```
 

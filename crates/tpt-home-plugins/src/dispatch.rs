@@ -17,6 +17,7 @@ use tpt_home_core::prelude::*;
 use tpt_home_ui as ui;
 
 use crate::lifecycle;
+use crate::manifest::Permissions;
 use crate::registry::Backend;
 use crate::runtime::{self, PluginRequest};
 
@@ -209,6 +210,7 @@ pub async fn list_plugins(State(db): State<DbPool>) -> Result<impl IntoResponse,
             "version": plugin.manifest.plugin.version,
             "enabled": enabled,
             "permissions": plugin.manifest.permissions.to_json(),
+            "approved_permissions": plugin.approved.intersect(&plugin.manifest.permissions).to_json(),
             "pages": plugin.manifest.pages.iter().map(|p| lifecycle::plugin_page_path(&plugin.manifest.plugin.id, &p.path)).collect::<Vec<_>>(),
             "installed_at": installed_at,
         }));
@@ -225,7 +227,8 @@ pub async fn install_plugin(
     mut multipart: Multipart,
 ) -> Result<impl IntoResponse, ApiError> {
     let mut package: Option<Vec<u8>> = None;
-    let mut enable = false;
+    let mut enable: Option<bool> = None;
+    let mut granted = Permissions::default();
     while let Some(mut field) = multipart
         .next_field()
         .await
@@ -247,10 +250,14 @@ pub async fn install_plugin(
                 package = Some(bytes);
             }
             Some("enable") => {
-                enable = matches!(
+                enable = Some(matches!(
                     field.text().await.unwrap_or_default().as_str(),
                     "true" | "1" | "on"
-                );
+                ));
+            }
+            Some("approve") => {
+                let list = field.text().await.unwrap_or_default();
+                granted = Permissions::parse_list(&list).map_err(ApiError::bad_request)?;
             }
             _ => {
                 let _ = field.text().await;
@@ -260,11 +267,20 @@ pub async fn install_plugin(
     let archive =
         package.ok_or_else(|| ApiError::bad_request("multipart field \"package\" is required"))?;
 
-    let (staged, _manifest) = lifecycle::stage_package(&archive)
+    let (staged, manifest) = lifecycle::stage_package(&archive)
         .map_err(|e| ApiError::bad_request(format!("invalid package: {e}")))?;
-    let installed = lifecycle::install_from_dir(&db, &staged, enable)
+    // Without an explicit `enable`, an upgrade keeps the plugin's current state
+    // rather than taking a running plugin offline.
+    let enable = match enable {
+        Some(enable) => enable,
+        None => lifecycle::is_enabled(&db, &manifest.plugin.id)
+            .await
+            .map_err(|e| ApiError::internal(e.to_string()))?,
+    };
+    let installed = lifecycle::install_from_dir(&db, &staged, enable, &granted)
         .await
         .map_err(|e| ApiError::internal(format!("install failed: {e}")))?;
+    let effective = granted.intersect(&installed.permissions);
 
     Ok((
         StatusCode::CREATED,
@@ -272,7 +288,8 @@ pub async fn install_plugin(
             "ok": true,
             "id": installed.plugin.id,
             "version": installed.plugin.version,
-            "approved_permissions": installed.permissions.to_json(),
+            "requested_permissions": installed.permissions.to_json(),
+            "approved_permissions": effective.to_json(),
         })),
     ))
 }

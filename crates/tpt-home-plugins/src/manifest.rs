@@ -64,6 +64,21 @@ pub struct Permissions {
 }
 
 impl Permissions {
+    /// Parse an approval list such as `db,kv`. Empty input grants nothing; an
+    /// unknown name is an error, so a typo cannot silently approve less.
+    pub fn parse_list(text: &str) -> Result<Self, String> {
+        let mut granted = Self::default();
+        for name in text.split(',').map(str::trim).filter(|n| !n.is_empty()) {
+            match name {
+                "db" => granted.db = true,
+                "kv" => granted.kv = true,
+                "storage" => granted.storage = true,
+                other => return Err(format!("unknown permission '{other}'")),
+            }
+        }
+        Ok(granted)
+    }
+
     /// Serialize as a sorted JSON array for the `plugins.approved_permissions`
     /// column.
     pub fn to_json(&self) -> String {
@@ -368,6 +383,23 @@ mod tests {
         assert_eq!(m.tables.len(), 1);
         assert_eq!(m.pages.len(), 1);
         assert_eq!(m.permissions.to_json(), "[\"db\"]");
+    }
+
+    #[test]
+    fn approval_lists_parse_strictly() {
+        assert_eq!(Permissions::parse_list("").unwrap(), Permissions::default());
+        assert_eq!(
+            Permissions::parse_list("db, kv").unwrap(),
+            Permissions {
+                db: true,
+                kv: true,
+                storage: false
+            }
+        );
+        assert!(
+            Permissions::parse_list("db,admin").is_err(),
+            "typo must not approve less silently"
+        );
     }
 
     #[test]
