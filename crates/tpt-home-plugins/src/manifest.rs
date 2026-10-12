@@ -28,10 +28,26 @@ pub struct PluginMeta {
     pub api_version: u32,
     /// Wasm file name inside the package (e.g. `plugin.wasm`).
     pub entry: String,
+    /// Execution tier. Unknown values fail to parse.
+    #[serde(default)]
+    pub runtime: Runtime,
 }
 
 fn default_api_version() -> u32 {
     SUPPORTED_API_VERSION
+}
+
+/// Plugin execution tier, shared by the manifest and the dispatcher.
+#[derive(Debug, Clone, Copy, Default, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "lowercase")]
+pub enum Runtime {
+    /// Sandboxed WebAssembly on wasmi (the only tier implemented so far).
+    #[default]
+    Wasm,
+    /// JS scripts on Boa (Phase 4b-B, not implemented yet).
+    Js,
+    /// External process over a scoped API token (Phase 4b-D, not implemented yet).
+    External,
 }
 
 /// `[permissions]` section. Everything defaults to *denied*; the admin sees
@@ -194,6 +210,16 @@ fn validate(m: &PluginManifest) -> Result<(), anyhow::Error> {
             "plugin api_version {} not supported (host supports {})",
             m.plugin.api_version,
             SUPPORTED_API_VERSION
+        );
+    }
+    if m.plugin.runtime != Runtime::Wasm {
+        anyhow::bail!(
+            "runtime '{}' is not implemented yet; only 'wasm' plugins load",
+            match m.plugin.runtime {
+                Runtime::Js => "js",
+                Runtime::External => "external",
+                Runtime::Wasm => "wasm",
+            }
         );
     }
     if m.plugin.entry.is_empty()
@@ -363,6 +389,27 @@ mod tests {
             "api_version = 99\n        entry = \"plugin.wasm\"",
         );
         assert!(parse(&bad_api).is_err());
+    }
+
+    #[test]
+    fn runtime_defaults_to_wasm_and_rejects_unknown_values() {
+        assert_eq!(parse(SAMPLE).unwrap().plugin.runtime, Runtime::Wasm);
+
+        let unknown = SAMPLE.replace(
+            "entry = \"plugin.wasm\"",
+            "entry = \"plugin.wasm\"
+        runtime = \"python\"",
+        );
+        assert!(parse(&unknown).is_err());
+
+        // Recognised but not yet implemented: rejected until the tier lands.
+        let js = SAMPLE.replace(
+            "entry = \"plugin.wasm\"",
+            "entry = \"plugin.wasm\"
+        runtime = \"js\"",
+        );
+        let err = parse(&js).unwrap_err().to_string();
+        assert!(err.contains("not implemented"), "{err}");
     }
 
     #[test]
