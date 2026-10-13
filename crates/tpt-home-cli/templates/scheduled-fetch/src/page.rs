@@ -26,8 +26,8 @@ const BODY: &str = r##"
   <p class="muted">Only admins can change the source or fetch now. The job fetches it once an hour.</p>
   <div class="row" style="gap:8px;flex-wrap:wrap">
     <input id="url" type="url" placeholder="https://example.com/status.json" style="max-width:420px">
-    <button onclick="saveSource()">Save</button>
-    <button class="secondary" onclick="fetchNow()">Fetch now</button>
+    <button data-click="saveSource">Save</button>
+    <button class="secondary" data-click="fetchNow">Fetch now</button>
   </div>
   <div class="muted" id="current" style="margin-top:8px">Loading…</div>
   <div id="msg"></div>

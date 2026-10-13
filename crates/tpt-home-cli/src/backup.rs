@@ -37,13 +37,23 @@ fn sql_quote(s: &str) -> String {
     format!("'{}'", s.replace('\'', "''"))
 }
 
-/// `tpt-home backup` — writes `<out>/tpt-<ts>.db` and `<out>/uploads/`.
+/// `tpt-home backup` — writes one folder per backup:
+/// `<out>/<ts>/tpt-<ts>.db` and `<out>/<ts>/uploads/`. Each folder holds its own
+/// copy of the uploads, so an older backup is never overwritten by a newer one.
 pub async fn backup(cfg: &Config, out_dir: Option<PathBuf>) -> anyhow::Result<()> {
     let out = out_dir.unwrap_or_else(|| cfg.data_dir.join("backups"));
     std::fs::create_dir_all(&out)?;
 
     let ts = ts_now();
-    let db_dest = out.join(format!("tpt-{ts}.db"));
+    let folder = out.join(ts.to_string());
+    // Not create_dir_all: two backups in the same second must not share a folder.
+    std::fs::create_dir(&folder).with_context(|| {
+        format!(
+            "create backup folder {} (only one backup per second)",
+            folder.display()
+        )
+    })?;
+    let db_dest = folder.join(format!("tpt-{ts}.db"));
 
     let db = tpt_home_api::init_server(cfg.clone()).await?;
     let dest_sql = db_dest.display().to_string();
@@ -52,7 +62,7 @@ pub async fn backup(cfg: &Config, out_dir: Option<PathBuf>) -> anyhow::Result<()
         .await
         .with_context(|| format!("VACUUM INTO {}", db_dest.display()))?;
 
-    let uploads_dest = out.join("uploads");
+    let uploads_dest = folder.join("uploads");
     if cfg.uploads_dir().is_dir() {
         copy_dir(&cfg.uploads_dir(), &uploads_dest)?;
     }

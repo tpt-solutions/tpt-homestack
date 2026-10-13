@@ -26,7 +26,7 @@ const BODY: &str = r##"
   <div class="row" style="gap:8px;flex-wrap:wrap">
     <input id="metric" maxlength="50" placeholder="metric, e.g. power_kwh" style="max-width:240px">
     <input id="value" type="number" step="any" placeholder="value" style="max-width:160px">
-    <button onclick="record()">Record</button>
+    <button data-click="record">Record</button>
   </div>
   <div id="msg"></div>
 </div>

@@ -71,9 +71,9 @@ Key decisions
 - [x] Settings page (password change)
 - [x] Admin pages: users and roles (installed-blueprints/plugins page deferred to Phase 4)
 - [ ] Shared components library (forms, tables, lists, modals, toasts)
-- [ ] Accessibility and responsive layout (mobile browsers)
+- [ ] Accessibility and responsive layout (mobile browsers) — PARTIAL: `scripts/browser-check.mjs` measures each page at 390 px and fails on sideways scrolling. Found and fixed the jobs table overflowing (640 px). NOT DONE: keyboard and screen-reader checks, contrast, and touch-target sizes
 - [ ] Embed WASM/assets into the single binary
-- [ ] UI tests
+- [ ] UI tests — PARTIAL: `scripts/browser-check.mjs` drives headless Chrome or Edge over the DevTools protocol. It checks seven pages for console errors and CSP violations, runs five real workflows (notes, settings, track, drop, users), and checks phone width. Not in CI yet: it needs a running server and a browser. Also the integration tests check the CSP nonce
 
 ## Phase 4 — WASM Plugin System (community blueprints)
 - [ ] Add `wasmi` runtime to the host (verify MIT/Apache dual license in cargo-deny)
@@ -92,8 +92,8 @@ Key decisions
 - [x] Plugin SDK crate (`tpt-home-plugin-sdk`) with a macro-style authoring experience for Rust plugins
 - [ ] Plugin template and example plugin (`tpt-home-bp-calendar`)
 - [x] Hot load/unload without a server restart — install, enable, disable and uninstall change the registry at once; verified live and in tests/lifecycle.rs
-- [x] Plugin isolation and failure handling (a crashing plugin must not take down the host) — a trapping guest fails only its own call (sandbox test); the next call runs
-- [ ] Plugin tests and fuzzing of the host boundary
+- [x] Plugin isolation and failure handling (a crashing plugin must not take down the host) — a trapping guest fails only its own call (sandbox test); the next call runs. JS plugins now run in a worker process with a memory cap (CLI build; tested on Windows, Linux not yet run). See `docs/PLUGIN_SANDBOX_REVIEW.md`
+- [ ] Plugin tests and fuzzing of the host boundary — PARTIAL: `crates/tpt-home-plugins/tests/boundary.rs` runs deterministic mutated inputs (manifests, SQL scope, `.tptp` packages) and checks for panics and escapes. Coverage-guided fuzzing is not built
 
 ## Phase 4b — Easy Plugin Authoring (JS scripts, any-language WASM, external processes, MCP)
 Four tiers sharing one manifest + capability model: JS scripts (Boa), WASM (Rust SDK + documented ABI), external processes (any language), MCP for AI agents.
@@ -179,11 +179,11 @@ Four tiers sharing one manifest + capability model: JS scripts (Boa), WASM (Rust
 - [ ] `tpt-home new --plugin <name>` scaffold for WASM plugins
 - [x] `tpt-home plugin build|install|list|enable|disable|remove` — `list` reads the plugins table; `install` takes `--approve` and `--enable` and matches the admin API; `remove` needs `--yes` unless `--keep-data`; verified by a live smoke run (the CLI writes the DB, so a running server picks up changes on restart)
 - [x] `tpt-home user add|list|remove|reset-password`
-- [x] `tpt-home backup` / `restore` (`VACUUM INTO` + uploads copy, atomic swap on restore)
+- [x] `tpt-home backup` / `restore` (`VACUUM INTO` + uploads copy, atomic swap on restore). Each backup now goes in its own timestamped folder; the earlier flat layout let a newer backup overwrite an older backup's uploads. Covered by `each_backup_keeps_its_own_uploads` in `tests/admin_cli.rs`
 - [x] Shell completions (bash, zsh, fish, powershell, elvish)
 - [x] `scripts/install.sh` systemd installer (user, hardened unit file, enable/start)
 - [x] Windows install script (`scripts/install.ps1`, logon Scheduled Task; script written, task registration not exercised here)
-- [ ] CLI integration tests — PARTIAL: `tests/plugin_cli.rs`, `tests/admin_cli.rs` and `tests/migrate_and_new_cli.rs` run the real binary for `plugin`, `user`, `token`, `backup`, `restore`, `migrate` (idempotent after init) and the refusal paths of `new` (bad id, outside a workspace). Not covered: `run` (starts the server), and `new` success (it writes into the repo)
+- [ ] CLI integration tests — PARTIAL: `tests/plugin_cli.rs`, `tests/admin_cli.rs` and `tests/migrate_and_new_cli.rs` run the real binary for `plugin`, `user`, `token`, `backup`, `restore`, `migrate` (idempotent after init) and the refusal paths of `new` (bad id, outside a workspace). `run` is covered by `tests/e2e_server.rs` (it starts the real server). Not covered: `new` success (it writes into the repo)
 
 ## Phase 5b — Automation and Data I/O
 - [x] Scheduled-job hook: `#[bp_job(every = "5m")]` on `async fn(DbPool) -> Result<(), ApiError>`; `JobEntry` registry with one loop per job, each run in its own task so errors are logged and panics contained; first run one period after boot; interval checked at compile time (`s`/`m`/`h`/`d`, minimum 10s). Verified by loop tests (repeat, error, panic) and interval-parser tests, and live: a 10s job in a scratch blueprint wrote rows at 10, 20 and 30s
@@ -232,15 +232,15 @@ Checked `logbook`, `records` and `sensor-alerts` against the plugin runtimes (wa
 
 ## Phase 8 — Quality, Security & Performance
 - [ ] Test coverage for core, macros, API, blueprints, plugins
-- [ ] End-to-end tests (login, blueprint use, plugin install)
-- [ ] Security review: auth, sessions, CSRF, XSS (markdown), path traversal, SQL injection, upload handling
-- [ ] Gate: this security review must pass before remote access (Tailscale or tunnel) is promoted to ordinary users in docs or the wizard
-- [ ] Plugin sandbox security review
+- [x] End-to-end tests (login, blueprint use, plugin install) — `crates/tpt-home-cli/tests/e2e_server.rs` starts the real `tpt-home run` on a loopback port and drives it over TCP: login and refusals, notes (create, list, render), track (table, row, CSV export), building and installing the records plugin through the multipart endpoint, and the multipart header refusal
+- [x] Security review: auth, sessions, CSRF, XSS (markdown), path traversal, SQL injection, upload handling — internal code review in `docs/SECURITY_REVIEW.md`. Seven fixes shipped, including a separate login rate limit (20/min), per-account lockout (10 failures, 15 min), a required `X-TPT-Request` header on multipart, no internal error detail sent to clients, no username-revealing login timing, and a 1024-character password cap. An outside review is still needed
+- [ ] Gate: this security review must pass before remote access (Tailscale or tunnel) is promoted to ordinary users in docs or the wizard — OPEN, and it cannot be closed in this repo: an independent review is required. Remaining residuals in `docs/SECURITY_REVIEW.md`: inline styles still allowed; plain-text hook and notification secrets; per-process rate limits and lockout; no coverage-guided fuzzing; the JS worker's Linux memory path not run; the browser checks are not in CI
+- [x] Plugin sandbox security review — `docs/PLUGIN_SANDBOX_REVIEW.md`: each control mapped to its test. The JS memory gap found in it is fixed in the CLI build: JS calls run in a worker process under an OS memory limit (`script_worker.rs`). OPEN: confirm the Linux `RLIMIT_DATA` path in CI (it type-checks, it has not run)
 - [x] Dependency audit (`cargo audit`, `cargo deny`): `cargo deny check` passes (advisories, bans, licenses, sources). `cargo audit` reports `rsa` RUSTSEC-2023-0071, which is only in Cargo.lock via `sqlx-mysql` and not compiled into any target (no fix exists); ignored with that reason in `.cargo/audit.toml`. The `paste` warning is accepted in `deny.toml`. Re-check on each dependency change
-- [ ] Benchmark vs targets: idle RAM < 30 MB, startup < 0.5 s, binary < 25 MB, CPU idle ~0%
+- [x] Benchmark vs targets: idle RAM < 30 MB, startup < 0.5 s, binary < 25 MB, CPU idle ~0% — measured on x86_64 Windows with `scripts/bench.ps1`: 22.3 MB, 247 ms, 11.3 MB, 0%. See `docs/BENCHMARKS.md`. NOT measured: ARM64 hardware, RAM under load, soak
 - [ ] Optimize memory allocations (allocator choice, pool sizes) — check the license of any allocator
 - [ ] Verify the targets on ARM64 hardware
-- [ ] Load and soak testing
+- [ ] Load and soak testing — PARTIAL: `scripts/load.ps1` ran a 30-minute soak (2.9 million reads, all 200, server memory level at about 26 MB after the first two minutes, p99 23 ms). The soak found a limiter cost that grew with the number of clients, now fixed. Results in `docs/BENCHMARKS.md`. NOT DONE: soaks of hours, concurrent writes, plugin and blueprint mixes. Rare stalls of 1–8 s remain unexplained
 
 ## Phase 9 — Documentation
 - [x] README (what, why, quickstart, license)
@@ -249,12 +249,12 @@ Checked `logbook`, `records` and `sensor-alerts` against the plugin runtimes (wa
 - [x] Plugin manifest and host API reference
 - [x] Architecture overview (docs/ARCHITECTURE.md)
 - [x] Deployment guide (systemd, Docker/Caddy, Cloudflare Tunnel, Windows) — docs/DEPLOYMENT.md
-- [ ] Admin and user guide
+- [x] Admin and user guide — `docs/GUIDE.md`: part 1 for people using the apps, part 2 for whoever runs the server (install, settings, users, tokens, apps, jobs, backups, sign-in protection, troubleshooting). Plain language; screenshots not included
 - [x] Rustdoc for all public crates (doc comments on public items)
-- [ ] Changelog and versioning policy
+- [x] Changelog and versioning policy — `CHANGELOG.md` (Keep a Changelog, `[Unreleased]` holds the work since 0.1.0) and `docs/RELEASING.md`
 
 ## Phase 10 — Release & Community
-- [ ] Version scheme (semver) and release checklist
+- [x] Version scheme (semver) and release checklist — `docs/RELEASING.md` (pre-1.0 rules, the breaking-change list, a nine-step checklist, hotfixes). The checklist's tests, fmt, clippy and cargo deny/audit steps were run and pass here
 - [ ] CI release pipeline: binaries for Linux x86_64, Linux ARM64, Windows, with checksums — PARTIAL: written, not run. `.github/workflows/release.yml` (tag `v*`, tag must match workspace version, native runners, SHA256SUMS, GitHub release). NOT YET RUN: needs a first tag push to verify; ARM64 relies on the `ubuntu-22.04-arm` runner
 - [ ] Publish crates to crates.io (core, macros, plugin SDK, official blueprints)
 - [ ] GitHub release and tags
@@ -265,7 +265,7 @@ Checked `logbook`, `records` and `sensor-alerts` against the plugin runtimes (wa
 
 ## Phase 11 — Ordinary-user experience (no terminal, no Rust)
 Phases 0-10 serve people comfortable with a shell and a compiler. This phase is for someone who just bought a PC and wants apps running. Depends on release binaries (Phase 10) and plugins that install without compiling (Phase 4/4b).
-- [ ] Native installers: Windows `.msi`/setup exe (installs, registers service, adds Start-menu shortcut that opens the UI); Linux `.deb` and `.rpm`; no Rust toolchain, no manual `init`
+- [ ] BLOCKED on tools here (not started): Native installers: Windows `.msi`/setup exe (installs, registers service, adds Start-menu shortcut that opens the UI); Linux `.deb` and `.rpm`; no Rust toolchain, no manual `init`
 - [ ] Browser-based first-run wizard: create admin, name the server, pick starter apps, choose remote access (extends the existing `/setup` page; no credentials printed to a terminal)
 - [ ] In-app app catalog: browse the plugin index, one-click install/enable/disable/remove from the admin UI (builds on the plugin list and detail pages and the Phase 10 index)
 - [ ] Capability approval written in plain language ("this app can read your notes") instead of raw permission names
@@ -290,7 +290,7 @@ Phases 0-10 serve people comfortable with a shell and a compiler. This phase is 
 
 ## Phase 12 — Appliance image (dedicated device, no OS setup)
 Goal: flash an image onto a small or low-end device, boot it, and open `homestack.local` from another device. No Linux or Windows install, no terminal. A kernel is still needed, so "replacing the OS" means a minimal purpose-built Linux that runs only homestack. Shares the first-run wizard, in-app update and in-app backup from Phase 11.
-- [ ] Choose the base: Buildroot, Alpine or Yocto (size, ARM64 + x86_64 support, license, update story) and record the decision
+- [ ] BLOCKED on a Linux build host and hardware (not started). Choose the base: Buildroot, Alpine or Yocto (size, ARM64 + x86_64 support, license, update story) and record the decision
 - [ ] Minimal image build pipeline in CI: x86_64 (USB/ISO for mini PCs and old desktops) and ARM64 (Raspberry Pi SD image), with checksums
 - [ ] Image runs only homestack: read-only root, writable data partition, hardened service, no SSH or shell by default (opt-in for admins)
 - [ ] First boot: DHCP, `homestack.local` via mDNS, headless first-run wizard in the browser; no monitor or keyboard needed

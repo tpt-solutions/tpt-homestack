@@ -41,7 +41,7 @@ cargo build --release --target wasm32-unknown-unknown
 |---|---|
 | `[plugin]` | `id` (lowercase, digits, underscore; namespaces routes and tables), `name`, `version`, `entry` (wasm or script file in the package, or the base URL for `external`), `api_version` (must be `1`), `runtime` (`wasm`, `js` with the `js` feature, or `external`) |
 | `[permissions]` | `db`, `kv`, `storage` — all default to denied. A capability is granted only when the manifest requests it **and** the admin approves it at install (`approve` form field, for example `approve=db,kv`). Anything not approved is refused at runtime, and the install response lists requested and approved. |
-| `[limits]` | `max_fuel` (instruction budget per call), `max_memory_mb`, `max_millis` (wall-clock budget per call, default 5000, checked at every host call) |
+| `[limits]` | `max_fuel` (instruction budget per call), `max_memory_mb` (the memory cap per call, plus a 16 MB base for JS workers), `max_millis` (wall-clock budget per call, default 5000, checked at every host call) |
 | `[[tables]]` | Tables created as `<id>_<name>` at install; column kinds `text`, `integer`, `real`, `bool` |
 | `[[migrations]]` | Forward-only schema changes: `version` (positive, strictly increasing) and `statements` (one each, touching only `<id>_*` tables). Each version runs once per plugin, in one transaction with the install. An edited, already-applied migration refuses the upgrade. There are no down migrations: to undo a change, add a new migration. |
 | `[[pages]]` | Declarative pages under `/plugins/<id><path>`. `kind = "table"` (rows from a scoped table; with `link = "/detail"` the first column links to a detail page), `"list"` (one item per row: the first column is the title, the rest a detail line), `"detail"` (one row, selected by `?id=<row id>`), or `"form"` (POSTs JSON to the plugin API at `action`). Column, field and action names must be plain identifiers. |
@@ -98,7 +98,7 @@ startup. Restart the server after a CLI change, or use the admin API for an
 immediate change:
 
 ```sh
-curl -H "Authorization: Bearer $ADMIN_TOKEN" -F approve=db -F package=@ticker-0.1.0.tptp http://127.0.0.1:8080/api/plugins/install
+curl -H "Authorization: Bearer $ADMIN_TOKEN" -H "X-TPT-Request: 1" -F approve=db -F package=@ticker-0.1.0.tptp http://127.0.0.1:8080/api/plugins/install
 curl -X POST -H "Authorization: Bearer $ADMIN_TOKEN" http://127.0.0.1:8080/api/plugins/ticker/enable
 ```
 
@@ -153,9 +153,16 @@ use `eval`, `Function`, the function-constructor escapes, modules, timers or
 
 Limits: `max_fuel` sets Boa's loop-iteration budget (roughly `max_fuel / 50`,
 so 50M gives about a million iterations per loop); recursion is capped at 256.
-`max_millis` is enforced at every host call. Boa has no heap cap, so the
-script's memory use is bounded only by the source size and the host's string
-caps. Treat untrusted scripts with that in mind.
+`max_millis` is enforced at every host call.
+
+**JavaScript calls run in a worker process.** In the CLI build, each call runs
+in a short-lived child of the server binary with an operating-system memory
+limit of `max_memory_mb` plus 16 MB. A script that exhausts its budget fails
+that one call, and the server keeps running. Each call costs about 16 ms in
+process start-up (Windows, release). Boa has no heap limit of its own, so the
+worker is what bounds memory. A library embedder that does not configure a
+worker runs scripts in-process with no memory cap. See
+[PLUGIN_SANDBOX_REVIEW.md](PLUGIN_SANDBOX_REVIEW.md).
 
 ## Host services (ABI v1)
 

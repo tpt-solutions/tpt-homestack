@@ -24,7 +24,7 @@ const BODY: &str = r##"
 <div class="card">
   <h2 style="margin-top:0">Record an event</h2>
   <input id="note" maxlength="500" placeholder="What happened?">
-  <div class="row" style="margin-top:8px"><button onclick="addEvent()">Record</button></div>
+  <div class="row" style="margin-top:8px"><button data-click="addEvent">Record</button></div>
   <div id="msg"></div>
 </div>
 <div class="grid">

@@ -31,8 +31,8 @@ fn content_fragment() -> String {
          <div class=\"card\">\n\
          <div class=\"row\">\n\
          <input id=\"q\" placeholder=\"Search notes…\" style=\"max-width:340px\">\n\
-         <button onclick=\"loadNotes()\">Search</button>\n\
-         <button class=\"secondary\" onclick=\"openEditor()\">New note</button>\n\
+         <button data-click=\"loadNotes\">Search</button>\n\
+         <button class=\"secondary\" data-click=\"openEditor\">New note</button>\n\
          </div>\n<div id=\"msg\"></div>\n</div>\n\
          <div id=\"editor\" class=\"card\" style=\"display:none\">\n\
          <input id=\"eid\" type=\"hidden\">\n\
@@ -40,9 +40,9 @@ fn content_fragment() -> String {
          <label for=\"etags\">Tags (comma separated)</label><input id=\"etags\">\n\
          <label for=\"ebody\">Body (markdown)</label><textarea id=\"ebody\" rows=\"12\"></textarea>\n\
          <div class=\"row\" style=\"margin-top:12px\">\n\
-         <button onclick=\"saveNote()\">Save</button>\n\
-         <button class=\"secondary\" onclick=\"previewNote()\">Preview</button>\n\
-         <button class=\"danger\" onclick=\"closeEditor()\">Cancel</button>\n\
+         <button data-click=\"saveNote\">Save</button>\n\
+         <button class=\"secondary\" data-click=\"previewNote\">Preview</button>\n\
+         <button class=\"danger\" data-click=\"closeEditor\">Cancel</button>\n\
          </div>\n<div id=\"preview\" class=\"msg\" style=\"display:none\"></div>\n</div>\n\
          <div id=\"list\"></div>\n</div>\n<script>\n{}\n</script>",
         r#"async function api(url, method, body) {
@@ -62,8 +62,8 @@ async function loadNotes() {
         <div class="spread">
           <strong>${esc(n.title)}</strong>
           <span class="row">
-            <button class="secondary" onclick="editNote(${n.id})">Edit</button>
-            <button class="danger" onclick="delNote(${n.id})">Delete</button>
+            <button class="secondary" data-click="editNote:${n.id}">Edit</button>
+            <button class="danger" data-click="delNote:${n.id}">Delete</button>
           </span>
         </div>
         <div class="muted">${new Date(n.updated_at * 1000).toLocaleString()} ${(n.tags || []).map(t => '<span class="badge">' + esc(t) + '</span>').join(' ')}</div>

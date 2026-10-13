@@ -46,3 +46,10 @@ tpt-home-api = { workspace = true }
 js = ["dep:boa_engine", "dep:boa_gc"]
 # HTTPS for `tpt.http`. Off by default; the CLI turns it on.
 https = ["dep:ureq"]
+
+# OS memory limits for JS script workers (see src/script_worker.rs).
+[target.'cfg(unix)'.dependencies]
+libc = "0.2"
+
+[target.'cfg(windows)'.dependencies]
+windows-sys = { version = "0.61", features = ["Win32_Foundation", "Win32_System_JobObjects"] }

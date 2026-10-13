@@ -36,6 +36,17 @@ pub const MAX_PASSWORD_CHARS: usize = 1024;
 /// is the most UTF-8 allows, so anything longer cannot be a valid password.
 const MAX_VERIFY_BYTES: usize = MAX_PASSWORD_CHARS * 4;
 
+/// Run one full Argon2 verification and discard the result. Used when the
+/// username does not exist, so a wrong username costs about as much as a
+/// wrong password and login timing does not reveal which accounts exist.
+pub fn verify_dummy(plain: &str) {
+    static DUMMY: std::sync::OnceLock<String> = std::sync::OnceLock::new();
+    let hash = DUMMY.get_or_init(|| {
+        hash_password("timing-dummy-password").expect("dummy hash is always valid")
+    });
+    let _ = verify_password(plain, hash);
+}
+
 /// Verify a plaintext password against a stored PHC-format hash.
 pub fn verify_password(plain: &str, stored: &str) -> bool {
     if plain.len() > MAX_VERIFY_BYTES {

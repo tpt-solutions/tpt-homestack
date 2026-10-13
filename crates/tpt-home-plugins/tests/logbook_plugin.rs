@@ -119,7 +119,8 @@ async fn summary_html(db: &DbPool, id: &str) -> String {
     .0
 }
 
-const ENTRY: &str = r#"{"logged_on":"2026-10-12","label":"Meter","value":"125.5","notes":"Kitchen"}"#;
+const ENTRY: &str =
+    r#"{"logged_on":"2026-10-12","label":"Meter","value":"125.5","notes":"Kitchen"}"#;
 
 #[tokio::test]
 async fn add_entry_then_delete_it() {
@@ -147,10 +148,22 @@ async fn bad_input_is_refused_with_a_reason() {
     install(&id).await;
 
     let cases = [
-        (r#"{"logged_on":"2025-02-29","label":"x","value":"1"}"#, "real date"),
-        (r#"{"logged_on":"2026-10-12","label":"  ","value":"1"}"#, "label must be"),
-        (r#"{"logged_on":"2026-10-12","label":"x","value":""}"#, "value must be a number"),
-        (r#"{"logged_on":"2026-10-12","label":"x","value":"abc"}"#, "value must be a number"),
+        (
+            r#"{"logged_on":"2025-02-29","label":"x","value":"1"}"#,
+            "real date",
+        ),
+        (
+            r#"{"logged_on":"2026-10-12","label":"  ","value":"1"}"#,
+            "label must be",
+        ),
+        (
+            r#"{"logged_on":"2026-10-12","label":"x","value":""}"#,
+            "value must be a number",
+        ),
+        (
+            r#"{"logged_on":"2026-10-12","label":"x","value":"abc"}"#,
+            "value must be a number",
+        ),
     ];
     for (body, reason) in cases {
         let (status, text) = call(&id, "POST", "entries", Some(body)).await;
@@ -189,8 +202,14 @@ async fn quotes_in_labels_are_stored_literally_and_escaped_on_the_page() {
     assert_eq!(status, 201, "{text}");
 
     let html = summary_html(&db, &id).await;
-    assert!(html.contains("O&#39;Brien&#39;); DROP TABLE x; --"), "{html}");
-    assert!(!html.contains("O'Brien'); DROP"), "unescaped label on the page");
+    assert!(
+        html.contains("O&#39;Brien&#39;); DROP TABLE x; --"),
+        "{html}"
+    );
+    assert!(
+        !html.contains("O'Brien'); DROP"),
+        "unescaped label on the page"
+    );
 }
 
 #[tokio::test]

@@ -112,12 +112,16 @@ pub async fn role_guard(req: Request, next: Next, required: &'static str) -> Res
     }
 }
 
+/// Header a client must send with multipart uploads; any value works.
+pub const REQUEST_HEADER: &str = "x-tpt-request";
+
 /// Defense-in-depth CSRF guard: state-changing `/api` calls must carry
-/// `Content-Type: application/json`, `multipart/form-data` (uploads) or
-/// `text/csv` (imports). HTML forms can only send `text/plain`, urlencoded or
-/// multipart bodies, and any other type from another origin needs a CORS
-/// preflight, which is not granted by default, so none of these can be forged
-/// by a cross-site page. `SameSite=Lax` cookies are the primary line of
+/// `Content-Type: application/json`, `multipart/form-data` (uploads, which also
+/// need the `X-TPT-Request` header) or `text/csv` (imports). HTML forms can
+/// only send `text/plain`, urlencoded or multipart bodies, and any other type
+/// from another origin needs a CORS preflight, which is not granted by default.
+/// JSON and CSV are therefore safe; multipart is safe because a form cannot
+/// set the custom header. `SameSite=Lax` cookies are the primary line of
 /// defense; this is the second.
 pub async fn csrf_guard(req: Request, next: Next) -> Response {
     let mutating = !matches!(
@@ -147,30 +151,91 @@ pub async fn csrf_guard(req: Request, next: Next) -> Response {
             )
                 .into_response();
         }
+        // A cross-site HTML form can send multipart without a preflight, but
+        // it cannot set a custom header. Requiring one closes that gap even
+        // where SameSite cookies are not enforced.
+        if ct == "multipart/form-data" && !req.headers().contains_key(REQUEST_HEADER) {
+            return (
+                StatusCode::UNSUPPORTED_MEDIA_TYPE,
+                "{\"error\":\"multipart requests must send the X-TPT-Request header\"}",
+            )
+                .into_response();
+        }
     }
     next.run(req).await
 }
 
 /// Add standard security headers to every response.
+/// Largest HTML page whose scripts are rewritten with a nonce. Pages are small
+/// server-rendered strings; anything larger is refused rather than buffered.
+const MAX_HTML_BYTES: usize = 8 * 1024 * 1024;
+
+/// Policy for responses that carry no page script. Scripts must come from this
+/// origin; inline scripts and inline event handlers are refused.
+const STATIC_CSP: &str = "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; \
+     img-src 'self' data:; object-src 'none'; base-uri 'self'; form-action 'self'; \
+     frame-ancestors 'none'";
+
+/// Security headers on every response. An HTML page gets a fresh nonce: its
+/// `<script>` tags carry it, and the policy allows only those scripts, so
+/// inline script injected into a page does not run.
+///
+/// Styles still allow `'unsafe-inline'`: the pages use `style=` attributes.
+/// Removing that needs the same treatment and is not done yet.
 pub async fn security_headers(req: Request, next: Next) -> Response {
-    let mut res = next.run(req).await;
-    let headers = res.headers_mut();
-    headers.insert(
+    let nonce = uuid::Uuid::new_v4().simple().to_string();
+    let res = next.run(req).await;
+    let (mut parts, body) = res.into_parts();
+
+    let is_html = parts
+        .headers
+        .get(header::CONTENT_TYPE)
+        .and_then(|v| v.to_str().ok())
+        .is_some_and(|ct| ct.starts_with("text/html"));
+    // Downloads are attachments of user-uploaded files; never rewrite them.
+    let is_download = parts.headers.contains_key(header::CONTENT_DISPOSITION);
+
+    let mut csp = STATIC_CSP.to_string();
+    let body = if is_html && !is_download {
+        match axum::body::to_bytes(body, MAX_HTML_BYTES).await {
+            Ok(bytes) => match std::str::from_utf8(&bytes) {
+                Ok(text) => {
+                    csp = format!(
+                        "default-src 'self'; script-src 'self' 'nonce-{nonce}'; \
+                         style-src 'self' 'unsafe-inline'; img-src 'self' data:; \
+                         object-src 'none'; base-uri 'self'; form-action 'self'; \
+                         frame-ancestors 'none'"
+                    );
+                    // The length changes with the nonce, so the old header goes.
+                    parts.headers.remove(header::CONTENT_LENGTH);
+                    axum::body::Body::from(
+                        text.replace("<script>", &format!("<script nonce=\"{nonce}\">")),
+                    )
+                }
+                Err(_) => axum::body::Body::from(bytes),
+            },
+            Err(_) => {
+                return (StatusCode::INTERNAL_SERVER_ERROR, "page too large").into_response();
+            }
+        }
+    } else {
+        body
+    };
+
+    parts.headers.insert(
         "X-Content-Type-Options",
         HeaderValue::from_static("nosniff"),
     );
-    headers.insert("X-Frame-Options", HeaderValue::from_static("DENY"));
-    headers.insert("Referrer-Policy", HeaderValue::from_static("no-referrer"));
-    // Inline script/style is required by the server-rendered shell for now;
-    // tightened CSP when the asset pipeline lands (Phase 3/7).
-    headers.insert(
-        "Content-Security-Policy",
-        HeaderValue::from_static(
-            "default-src 'self'; script-src 'self' 'unsafe-inline'; \
-             style-src 'self' 'unsafe-inline'; img-src 'self' data:",
-        ),
-    );
-    res
+    parts
+        .headers
+        .insert("X-Frame-Options", HeaderValue::from_static("DENY"));
+    parts
+        .headers
+        .insert("Referrer-Policy", HeaderValue::from_static("no-referrer"));
+    if let Ok(value) = HeaderValue::from_str(&csp) {
+        parts.headers.insert("Content-Security-Policy", value);
+    }
+    Response::from_parts(parts, body)
 }
 
 /// Attach a unique request id and a tracing span to each request.
@@ -202,7 +267,23 @@ struct LimiterInner {
     login_max: u32,
     window: Duration,
     trust_proxy: bool,
-    hits: Mutex<HashMap<String, (Instant, u32)>>,
+    hits: Mutex<HitTable>,
+}
+
+/// Per-client hit counts: `(window start, hits)`, plus when stale entries were
+/// last removed.
+struct HitTable {
+    counts: HashMap<String, (Instant, u32)>,
+    pruned_at: Instant,
+}
+
+impl HitTable {
+    fn new() -> Mutex<Self> {
+        Mutex::new(Self {
+            counts: HashMap::new(),
+            pruned_at: Instant::now(),
+        })
+    }
 }
 
 impl RateLimiter {
@@ -213,7 +294,7 @@ impl RateLimiter {
                 login_max: LOGIN_MAX_DEFAULT,
                 window,
                 trust_proxy: false,
-                hits: Mutex::new(HashMap::new()),
+                hits: HitTable::new(),
             }),
         }
     }
@@ -229,7 +310,7 @@ impl RateLimiter {
                 login_max: inner.login_max,
                 window: inner.window,
                 trust_proxy: trust,
-                hits: Mutex::new(HashMap::new()),
+                hits: HitTable::new(),
             }),
         }
     }
@@ -241,10 +322,19 @@ impl RateLimiter {
 
     /// Record a hit for `key` against an explicit cap; `false` means over it.
     fn check_with_max(&self, key: &str, max: u32) -> bool {
-        let mut hits = self.inner.hits.lock().unwrap_or_else(|e| e.into_inner());
+        let mut table = self.inner.hits.lock().unwrap_or_else(|e| e.into_inner());
         let now = Instant::now();
-        hits.retain(|_, (start, _)| now.duration_since(*start) < self.inner.window);
-        let entry = hits.entry(key.to_string()).or_insert((now, 0));
+        // Removing stale clients scans the whole table, so it runs once per
+        // window rather than on every request. An old entry is still reset when
+        // its client next appears, so the limit does not change.
+        if now.duration_since(table.pruned_at) >= self.inner.window {
+            let window = self.inner.window;
+            table
+                .counts
+                .retain(|_, (start, _)| now.duration_since(*start) < window);
+            table.pruned_at = now;
+        }
+        let entry = table.counts.entry(key.to_string()).or_insert((now, 0));
         if now.duration_since(entry.0) >= self.inner.window {
             *entry = (now, 0);
         }
@@ -260,17 +350,16 @@ pub const LOGIN_MAX_DEFAULT: u32 = 20;
 /// Client key for the limiter: the direct peer address, or, when
 /// `trust_proxy` is set, the reverse-proxy-forwarded IP when present.
 pub fn client_key(req: &Request, trust_proxy: bool) -> String {
-    if trust_proxy {
-        if let Some(ip) = req
+    if trust_proxy
+        && let Some(ip) = req
             .headers()
             .get("x-forwarded-for")
             .and_then(|v| v.to_str().ok())
             .and_then(|v| v.split(',').next())
             .map(str::trim)
             .filter(|v| !v.is_empty())
-        {
-            return ip.to_string();
-        }
+    {
+        return ip.to_string();
     }
     req.extensions()
         .get::<axum::extract::ConnectInfo<std::net::SocketAddr>>()

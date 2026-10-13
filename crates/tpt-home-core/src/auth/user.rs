@@ -169,7 +169,7 @@ pub async fn authenticate(
         Ok(u) => u,
         Err(_) => {
             // Burn comparable time so missing users are indistinguishable.
-            let _ = verify_password(password, "$argon2id$invalid$invalid");
+            super::password::verify_dummy(password);
             return Err(AuthError::InvalidCredentials);
         }
     };

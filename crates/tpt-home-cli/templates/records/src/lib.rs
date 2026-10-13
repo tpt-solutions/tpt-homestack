@@ -128,7 +128,7 @@ const PAGE_BODY: &str = r##"
   <label for="notes">Notes</label>
   <textarea id="notes" rows="3" maxlength="5000" placeholder="Optional"></textarea>
   <div class="row" style="margin-top:8px">
-    <button onclick="addRecord()">Add</button>
+    <button data-click="addRecord">Add</button>
   </div>
   <div id="msg"></div>
 </div>
@@ -155,7 +155,7 @@ async function load() {
     list.innerHTML = rows.map(r =>
       '<div class="card">' +
         '<div class="spread"><strong>' + esc(r.title) + '</strong>' +
-        '<button class="secondary" onclick="removeRecord(' + Number(r.id) + ')">Delete</button></div>' +
+        '<button class="secondary" data-click="removeRecord:' + Number(r.id) + '">Delete</button></div>' +
         (r.notes ? '<p class="muted" style="white-space:pre-wrap">' + esc(r.notes) + '</p>' : '') +
       '</div>'
     ).join('');

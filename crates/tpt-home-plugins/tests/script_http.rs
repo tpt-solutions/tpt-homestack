@@ -295,3 +295,41 @@ fn https_to_a_plaintext_device_fails_cleanly() {
     );
     let _ = seen;
 }
+
+#[test]
+fn redirects_are_not_followed() {
+    // The redirect target is a declared host, so only the no-redirect rule
+    // keeps the script from reaching it.
+    let (target, target_seen) = device(1);
+    let target_host = format!("127.0.0.1:{target}");
+    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    let port = listener.local_addr().unwrap().port();
+    let redirect_to = format!("http://{target_host}/moved");
+    std::thread::spawn(move || {
+        if let Ok((mut stream, _)) = listener.accept() {
+            let mut buf = vec![0u8; 8192];
+            let _ = stream.read(&mut buf);
+            let reply = format!(
+                "HTTP/1.0 302 Found\r\nLocation: {redirect_to}\r\nContent-Length: 0\r\n\r\n"
+            );
+            let _ = stream.write_all(reply.as_bytes());
+        }
+    });
+
+    let host = format!("127.0.0.1:{port}");
+    let body = run(
+        &format!(
+            r#"function handle() {{
+                const r = tpt.http.get("http://{host}/start");
+                return {{ status: 200, body: String(r.status) }};
+            }}"#
+        ),
+        granted(),
+        &[&host, &target_host],
+    );
+    assert_eq!(body, "302", "the script sees the redirect itself");
+    assert!(
+        target_seen.lock().unwrap().is_empty(),
+        "the redirect target was contacted"
+    );
+}

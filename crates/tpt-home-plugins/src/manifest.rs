@@ -7,7 +7,7 @@
 //! entry binary, declared capabilities (granted by the admin at install
 //! time), resource limits, host-created tables and declarative pages.
 
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use std::path::Path;
 
 /// Current plugin ABI version understood by this host.
@@ -52,7 +52,7 @@ pub enum Runtime {
 
 /// `[permissions]` section. Everything defaults to *denied*; the admin sees
 /// these at install time and the runtime enforces the approved set.
-#[derive(Debug, Clone, Default, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(default)]
 pub struct Permissions {
     /// SQL access, scoped to `<id>_*` tables only.
@@ -160,7 +160,7 @@ impl Permissions {
 }
 
 /// `[limits]` section. Defaults are deliberately modest.
-#[derive(Debug, Clone, Deserialize, PartialEq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(default)]
 pub struct Limits {
     /// Wasm fuel per invocation (roughly instructions/10k).

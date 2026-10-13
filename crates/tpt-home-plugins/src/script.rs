@@ -33,8 +33,9 @@ use boa_engine::{
 };
 
 use crate::host::{HostError, HostResult, HostServices};
-use crate::manifest::{Permissions, PluginManifest};
+use crate::manifest::{Limits, Permissions, PluginManifest};
 use crate::runtime::{PluginRequest, PluginResponse};
+use crate::script_worker;
 
 /// Largest accepted script source.
 pub const MAX_SOURCE_BYTES: usize = 1024 * 1024;
@@ -155,9 +156,14 @@ const ENTRY: &str = r#"
 
 /// Run a script plugin's `handle` for `request`.
 ///
+/// When a worker executable is configured (see
+/// [`script_worker::set_worker_exe`]), the call runs in a child process under
+/// an operating-system memory limit. Otherwise it runs in this process, where
+/// memory is not capped.
+///
 /// Every failure is an `Err`: syntax, runtime errors, exceeded loop or
-/// recursion limits, and a passed deadline. The deadline message is the one
-/// case the caller can rely on, because it is reported from the host flag.
+/// recursion limits, a passed deadline, and in a worker a crash or memory
+/// stop. The deadline message is the one case the caller can rely on.
 pub fn call_script(
     script: &ScriptSource,
     manifest: &PluginManifest,
@@ -167,13 +173,45 @@ pub fn call_script(
     db_path: &Path,
     storage_dir: &Path,
 ) -> Result<PluginResponse, anyhow::Error> {
-    let deadline = Instant::now() + Duration::from_millis(manifest.limits.max_millis);
+    if let Some(exe) = script_worker::worker_exe() {
+        let job = script_worker::Job {
+            source: script.source.clone(),
+            limits: manifest.limits.clone(),
+            plugin_id: plugin_id.to_string(),
+            perms: perms.clone(),
+            request: request.clone(),
+            db_path: db_path.to_path_buf(),
+            storage_dir: storage_dir.to_path_buf(),
+        };
+        return script_worker::run_isolated(exe, &job);
+    }
+    call_in_process(
+        script,
+        &manifest.limits,
+        request,
+        plugin_id,
+        perms,
+        db_path,
+        storage_dir,
+    )
+}
+
+/// Run a script in this process. Used directly, and by the worker process.
+pub(crate) fn call_in_process(
+    script: &ScriptSource,
+    limits: &Limits,
+    request: &PluginRequest,
+    plugin_id: &str,
+    perms: &Permissions,
+    db_path: &Path,
+    storage_dir: &Path,
+) -> Result<PluginResponse, anyhow::Error> {
+    let deadline = Instant::now() + Duration::from_millis(limits.max_millis);
     let mut context = Context::default();
     {
-        let limits = context.runtime_limits_mut();
-        limits
-            .set_loop_iteration_limit((manifest.limits.max_fuel / FUEL_PER_LOOP_ITERATION).max(1));
-        limits.set_recursion_limit(RECURSION_LIMIT);
+        let runtime = context.runtime_limits_mut();
+        runtime.set_loop_iteration_limit((limits.max_fuel / FUEL_PER_LOOP_ITERATION).max(1));
+        runtime.set_recursion_limit(RECURSION_LIMIT);
     }
     context.insert_data(ScriptHost {
         services: RefCell::new(HostServices::new(

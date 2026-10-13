@@ -145,7 +145,10 @@ async fn export_then_import_is_byte_identical() {
     let (app, cookie) = authed_router().await;
     let first = create_table(&app, &cookie, "Expenses").await;
     let source = "label,amount,paid\r\ncoffee,3.5,true\r\nbook,12,false\r\n";
-    assert_eq!(import(&app, &cookie, first, source).await, StatusCode::CREATED);
+    assert_eq!(
+        import(&app, &cookie, first, source).await,
+        StatusCode::CREATED
+    );
 
     let exported = export(&app, &cookie, first).await;
     assert!(exported.starts_with("label,amount,paid\r\n"), "{exported}");
@@ -164,7 +167,10 @@ async fn headers_are_case_insensitive_and_a_bom_is_ignored() {
     let (app, cookie) = authed_router().await;
     let table = create_table(&app, &cookie, "Shouting").await;
     let text = "\u{feff}LABEL,Amount,PAID\r\nrent,900,true\r\n";
-    assert_eq!(import(&app, &cookie, table, text).await, StatusCode::CREATED);
+    assert_eq!(
+        import(&app, &cookie, table, text).await,
+        StatusCode::CREATED
+    );
     assert!(export(&app, &cookie, table).await.contains("rent"));
 }
 

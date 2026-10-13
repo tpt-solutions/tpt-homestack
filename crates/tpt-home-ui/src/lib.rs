@@ -91,10 +91,37 @@ pre.md { background:var(--bg); border:1px solid var(--line); border-radius:8px;
 }
 "#;
 
+/// Event delegation for every page. Elements name their handler in
+/// `data-click`, `data-submit` or `data-change`, as `fn` or `fn:arg:arg`. Whole
+/// numbers in the arguments are passed as numbers. The named global function is
+/// called with those arguments, then the event and the element. Returning
+/// `false` cancels the default action. Pages use this
+/// instead of inline `onclick=` attributes, so the Content-Security-Policy can
+/// refuse inline handlers.
+pub const DISPATCH_JS: &str = r#"
+(function () {
+  function run(attr, e) {
+    const el = e.target instanceof Element ? e.target.closest('[' + attr + ']') : null;
+    if (!el) return;
+    const parts = el.getAttribute(attr).split(':');
+    const fn = window[parts[0]];
+    if (typeof fn !== 'function') return;
+    // Whole numbers arrive as numbers, as they did from inline handlers, so
+    // comparisons like `t.id === id` still hold.
+    const args = parts.slice(1).map((a) => (/^-?\d+$/.test(a) ? Number(a) : a));
+    if (fn.apply(el, args.concat([e, el])) === false) e.preventDefault();
+  }
+  document.addEventListener('click', (e) => run('data-click', e));
+  document.addEventListener('submit', (e) => run('data-submit', e));
+  document.addEventListener('change', (e) => run('data-change', e));
+})();
+"#;
+
 fn shell_open(title: &str) -> String {
     format!(
         "<!doctype html>\n<html lang=\"en\">\n<head>\n<meta charset=\"utf-8\">\n\
          <meta name=\"viewport\" content=\"width=device-width, initial-scale=1\">\n\
+         <link rel=\"icon\" href=\"data:,\">\n\
          <title>{} · tpt-homestack</title>\n<style>{CSS}</style>\n</head>\n<body>",
         esc(title)
     )
@@ -127,7 +154,7 @@ fn sidebar(nav: &[(String, String)], active: &str, user: &UserView) -> String {
     format!(
         "<aside class=\"sidebar\">\n<div class=\"brand\">tpt-homestack</div>\n{links}\n\
          <div class=\"who\">signed in as <strong>{}</strong> <span class=\"badge\">{}</span><br>\
-         <a href=\"/settings\">Settings</a><a href=\"#\" onclick=\"logout();return false\">Sign out</a></div>\n</aside>",
+         <a href=\"/settings\">Settings</a><a href=\"#\" data-click=\"logout\">Sign out</a></div>\n</aside>",
         esc(&user.username),
         esc(&user.role)
     )
@@ -144,7 +171,7 @@ pub fn page(
     format!(
         "{}\n<div class=\"layout\">\n{}\n<main class=\"main\">\n<h1>{}</h1>\n{}\n</main>\n</div>\n<script>\n\
          async function postJson(url, body) {{\n  const r = await fetch(url, {{method:'POST', headers:{{'Content-Type':'application/json'}}, body: JSON.stringify(body)}});\n  const j = await r.json().catch(() => ({{}}));\n  if (!r.ok) throw new Error(j.error || r.statusText);\n  return j;\n}}\n\
-         async function logout() {{ await postJson('/api/auth/logout', {{}}); location.href = '/login'; }}\n</script>\n</body>\n</html>",
+         function logout() {{ postJson('/api/auth/logout', {{}}).finally(() => location.href = '/login'); return false; }}\n{DISPATCH_JS}</script>\n</body>\n</html>",
         shell_open(title),
         sidebar(nav, active, user),
         esc(title),
@@ -155,7 +182,7 @@ pub fn page(
 /// Standalone (no-shell) page used for login and first-run setup.
 pub fn bare_page(title: &str, body: &str) -> String {
     format!(
-        "{}\n<div class=\"center\">\n<div class=\"brand\" style=\"font-weight:700;font-size:20px;margin-bottom:16px\">tpt-homestack</div>\n{}\n</div>\n</body>\n</html>",
+        "{}\n<div class=\"center\">\n<div class=\"brand\" style=\"font-weight:700;font-size:20px;margin-bottom:16px\">tpt-homestack</div>\n{}\n</div>\n<script>{DISPATCH_JS}</script>\n</body>\n</html>",
         shell_open(title),
         body
     )
@@ -168,7 +195,7 @@ pub fn login_page(error: Option<&str>) -> String {
         .unwrap_or_default();
     let body = format!(
         "<div class=\"card\">\n{err}\n<h1 style=\"margin-top:0\">Sign in</h1>\n\
-         <form onsubmit=\"return doLogin(event)\">\n\
+         <form data-submit=\"doLogin\">\n\
          <label for=\"u\">Username</label><input id=\"u\" autocomplete=\"username\" required>\n\
          <label for=\"p\">Password</label><input id=\"p\" type=\"password\" autocomplete=\"current-password\" required>\n\
          <div style=\"margin-top:14px\"><button type=\"submit\">Sign in</button></div>\n</form>\n</div>\n\
@@ -185,7 +212,7 @@ pub fn setup_page(error: Option<&str>) -> String {
     let body = format!(
         "<div class=\"card\">\n{err}\n<h1 style=\"margin-top:0\">Welcome</h1>\n\
          <p class=\"muted\">This instance has no users yet. Create the first admin account.</p>\n\
-         <form onsubmit=\"return doSetup(event)\">\n\
+         <form data-submit=\"doSetup\">\n\
          <label for=\"u\">Admin username</label><input id=\"u\" autocomplete=\"username\" required>\n\
          <label for=\"p\">Password (min 8 chars)</label><input id=\"p\" type=\"password\" autocomplete=\"new-password\" required>\n\
          <div style=\"margin-top:14px\"><button type=\"submit\">Create admin</button></div>\n</form>\n</div>\n\
@@ -217,15 +244,60 @@ pub fn dashboard_content(blueprints: &[(&str, &str)]) -> String {
 
 /// Settings page: change your own password.
 pub fn settings_content() -> String {
-    "<div class=\"card\" style=\"max-width:420px\">\n\
-     <h2 style=\"margin-top:0\">Change password</h2>\n\
-     <form onsubmit=\"return doPwChange(event)\">\n\
-     <label for=\"cur\">Current password</label><input id=\"cur\" type=\"password\" autocomplete=\"current-password\" required>\n\
-     <label for=\"new\">New password (min 8 chars)</label><input id=\"new\" type=\"password\" autocomplete=\"new-password\" required>\n\
-     <div id=\"pwmsg\"></div>\n\
-     <div style=\"margin-top:14px\"><button type=\"submit\">Update password</button></div>\n</form>\n</div>\n\
-     <script>\nasync function doPwChange(ev) {{\n  ev.preventDefault();\n  const msg = document.getElementById('pwmsg');\n  try {{\n    await postJson('/api/auth/change-password', {{current: document.getElementById('cur').value, new_password: document.getElementById('new').value}});\n    msg.innerHTML = '<div class=\"msg ok\">Password changed. Sign in again…</div>';\n    setTimeout(() => location.href = '/login', 1200);\n  }} catch (e) {{ msg.innerHTML = '<div class=\"msg error\">' + e.message + '</div>'; }}\n  return false;\n}}\n</script>"
+    // A plain literal, not a format string: braces here are real JavaScript.
+    // The script must use only what this page defines (`fetch`), and it shows
+    // server messages as text, not HTML.
+    r#"<div class="card" style="max-width:420px">
+<h2 style="margin-top:0">Change password</h2>
+<form data-submit="doPwChange">
+<label for="cur">Current password</label><input id="cur" type="password" autocomplete="current-password" required>
+<label for="new">New password (min 8 chars)</label><input id="new" type="password" autocomplete="new-password" required>
+<div id="pwmsg"></div>
+<div style="margin-top:14px"><button type="submit">Update password</button></div>
+</form>
+</div>
+<script>
+async function doPwChange(ev) {
+  ev.preventDefault();
+  const msg = document.getElementById('pwmsg');
+  msg.replaceChildren();
+  const box = document.createElement('div');
+  try {
+    const r = await fetch('/api/auth/change-password', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({current: document.getElementById('cur').value, new_password: document.getElementById('new').value}),
+    });
+    const j = await r.json().catch(() => ({}));
+    if (!r.ok) throw new Error(j.error || r.statusText);
+    box.className = 'msg ok';
+    box.textContent = 'Password changed. Sign in again…';
+    msg.appendChild(box);
+    setTimeout(() => location.href = '/login', 1200);
+  } catch (e) {
+    box.className = 'msg error';
+    box.textContent = e.message;
+    msg.appendChild(box);
+  }
+  return false;
+}
+</script>"#
         .to_string()
+}
+
+#[cfg(test)]
+mod settings_tests {
+    use super::*;
+
+    #[test]
+    fn settings_script_is_plain_javascript() {
+        let html = settings_content();
+        // A format-string leftover would leave doubled braces in the script.
+        assert!(!html.contains("{{") && !html.contains("}}"), "{html}");
+        // The script must not call helpers this page does not define.
+        assert!(!html.contains("postJson"), "{html}");
+        assert!(html.contains("fetch('/api/auth/change-password',"));
+    }
 }
 
 /// Admin · users page.
@@ -239,7 +311,7 @@ pub fn users_admin_content(users: &[UserRow]) -> String {
                 "<span class=\"badge\">active</span>".to_string()
             };
             let role_sel = format!(
-                "<select onchange=\"setRole({}, this.value)\">{}{} </select>",
+                "<select data-change=\"setRole:{}\">{}{} </select>",
                 u.id,
                 if u.role == "admin" {
                     "<option value=\"admin\" selected>admin</option><option value=\"user\">user</option>"
@@ -250,16 +322,16 @@ pub fn users_admin_content(users: &[UserRow]) -> String {
             );
             format!(
                 "<tr><td>{}</td><td>{}</td><td>{}</td><td>{}</td>\
-                 <td class=\"row\">{}<button class=\"secondary\" onclick=\"resetPw({}, prompt('new password (min 8 chars)'))\">Reset pw</button>\
-                 <button class=\"danger\" onclick=\"delUser({})\">Delete</button></td></tr>",
+                 <td class=\"row\">{}<button class=\"secondary\" data-click=\"resetPw:{}\">Reset pw</button>\
+                 <button class=\"danger\" data-click=\"delUser:{}\">Delete</button></td></tr>",
                 u.id,
                 esc(&u.username),
                 status,
                 role_sel,
                 if u.disabled {
-                    format!("<button class=\"secondary\" onclick=\"setDisabled({}, false)\">Enable</button>", u.id)
+                    format!("<button class=\"secondary\" data-click=\"setDisabled:{}:false\">Enable</button>", u.id)
                 } else {
-                    format!("<button class=\"secondary\" onclick=\"setDisabled({}, true)\">Disable</button>", u.id)
+                    format!("<button class=\"secondary\" data-click=\"setDisabled:{}:true\">Disable</button>", u.id)
                 },
                 u.id,
                 u.id
@@ -268,7 +340,7 @@ pub fn users_admin_content(users: &[UserRow]) -> String {
         .collect();
     format!(
         "<div class=\"card\">\n<h2 style=\"margin-top:0\">Create user</h2>\n\
-         <form onsubmit=\"return doCreate(event)\">\n\
+         <form data-submit=\"doCreate\">\n\
          <div class=\"row\"><input id=\"nu\" placeholder=\"username\" style=\"max-width:200px\" required>\n\
          <input id=\"np\" type=\"password\" placeholder=\"password\" style=\"max-width:200px\" required>\n\
          <select id=\"nr\"><option value=\"user\">user</option><option value=\"admin\">admin</option></select>\n\
@@ -277,9 +349,9 @@ pub fn users_admin_content(users: &[UserRow]) -> String {
          <tbody>{rows}</tbody>\n</table>\n</div>\n\
          <script>\nasync function api(url, method, body) {{\n  const r = await fetch(url, {{method, headers:{{'Content-Type':'application/json'}}, body: body ? JSON.stringify(body) : undefined}});\n  const j = await r.json().catch(() => ({{}}));\n  if (!r.ok) throw new Error(j.error || r.statusText);\n  return j;\n}}\n\
          function reload() {{ location.reload(); }}\nasync function doCreate(ev) {{ ev.preventDefault(); try {{ await api('/api/admin/users', 'POST', {{username: nu.value, password: np.value, role: nr.value}}); reload(); }} catch (e) {{ alert(e.message); }} return false; }}\n\
-         async function setRole(id, role) {{ try {{ await api('/api/admin/users/' + id, 'PATCH', {{role}}); reload(); }} catch (e) {{ alert(e.message); }} }}\n\
-         async function setDisabled(id, disabled) {{ try {{ await api('/api/admin/users/' + id, 'PATCH', {{disabled}}); reload(); }} catch (e) {{ alert(e.message); }} }}\n\
-         async function resetPw(id, pw) {{ if (!pw || pw.length < 8) return; try {{ await api('/api/admin/users/' + id, 'PATCH', {{password: pw}}); alert('password updated'); }} catch (e) {{ alert(e.message); }} }}\n\
+         async function setRole(id, ev, el) {{ try {{ await api('/api/admin/users/' + id, 'PATCH', {{role: el.value}}); reload(); }} catch (e) {{ alert(e.message); }} }}\n\
+         async function setDisabled(id, flag) {{ try {{ await api('/api/admin/users/' + id, 'PATCH', {{disabled: flag === 'true'}}); reload(); }} catch (e) {{ alert(e.message); }} }}\n\
+         async function resetPw(id) {{ const pw = prompt('new password (min 8 chars)'); if (!pw || pw.length < 8) return; try {{ await api('/api/admin/users/' + id, 'PATCH', {{password: pw}}); alert('password updated'); }} catch (e) {{ alert(e.message); }} }}\n\
          async function delUser(id) {{ if (!confirm('Delete user ' + id + '?')) return; try {{ await api('/api/admin/users/' + id, 'DELETE'); reload(); }} catch (e) {{ alert(e.message); }} }}\n</script>"
     )
 }
@@ -402,7 +474,7 @@ pub fn plugin_form_page(fields: &[String], action: &str) -> String {
     let field_names: Vec<String> = fields.iter().map(|f| format!("'{f}'")).collect();
     format!(
         "<div class=\"card\" style=\"max-width:480px\">\n\
-         <form onsubmit=\"return doSubmit(event)\">\n{inputs}\n\
+         <form data-submit=\"doSubmit\">\n{inputs}\n\
          <div style=\"margin-top:14px\"><button type=\"submit\">Submit</button></div>\n</form>\n\
          <div id=\"pmsg\"></div>\n</div>\n\
          <script>\nasync function doSubmit(ev) {{\n  ev.preventDefault();\n  const body = {{}};\n  for (const f of [{}]) body[f] = document.getElementById('pf_' + f).value;\n  const r = await fetch('{action}', {{method:'POST', headers:{{'Content-Type':'application/json'}}, body: JSON.stringify(body)}});\n  const j = await r.json().catch(() => ({{}}));\n  const msg = document.getElementById('pmsg');\n  msg.innerHTML = r.ok ? '<div class=\"msg ok\">saved</div>' : '<div class=\"msg error\">' + (j.error || r.statusText) + '</div>';\n  return false;\n}}\n</script>",

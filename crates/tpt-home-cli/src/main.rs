@@ -105,7 +105,7 @@ enum Command {
     },
     /// Generate shell completions.
     Completions { shell: Shell },
-    /// Manage WASM plugins (Phase 4 — not yet implemented).
+    /// Build, install and manage plugins (WASM, JavaScript and external).
     Plugin {
         #[command(subcommand)]
         cmd: PluginCmd,
@@ -218,8 +218,25 @@ fn load_config(data_dir: Option<std::path::PathBuf>) -> anyhow::Result<Config> {
     Config::load(data_dir)
 }
 
-#[tokio::main]
-async fn main() -> anyhow::Result<()> {
+fn main() -> anyhow::Result<()> {
+    // A script worker runs one JavaScript call and exits. It must not parse
+    // CLI arguments or start the async runtime, so check for it first.
+    #[cfg(feature = "js")]
+    if std::env::args().nth(1).as_deref() == Some(tpt_home_plugins::script_worker::WORKER_ARG) {
+        std::process::exit(tpt_home_plugins::script_worker::run_worker());
+    }
+    tokio::runtime::Builder::new_multi_thread()
+        .enable_all()
+        .build()?
+        .block_on(cli_main())
+}
+
+async fn cli_main() -> anyhow::Result<()> {
+    // JavaScript plugins run in worker processes of this same binary.
+    #[cfg(feature = "js")]
+    if let Ok(exe) = std::env::current_exe() {
+        tpt_home_plugins::script_worker::set_worker_exe(exe);
+    }
     let cli = Cli::parse();
 
     match cli.command {

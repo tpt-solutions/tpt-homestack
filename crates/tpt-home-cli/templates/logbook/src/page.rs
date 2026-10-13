@@ -39,7 +39,7 @@ const BODY: &str = r##"
   <input id="value" type="number" step="any" style="max-width:220px">
   <label for="notes">Notes</label>
   <textarea id="notes" rows="2" maxlength="2000" placeholder="Optional"></textarea>
-  <div class="row" style="margin-top:8px"><button onclick="addEntry()">Add</button></div>
+  <div class="row" style="margin-top:8px"><button data-click="addEntry">Add</button></div>
   <div id="msg"></div>
 </div>
 <div class="card">
@@ -73,7 +73,7 @@ async function loadEntries() {
   if (rows.length === 0) { list.innerHTML = '<p class="muted">No entries yet.</p>'; return; }
   list.innerHTML = '<table><thead><tr><th>Date</th><th>Label</th><th>Value</th><th>Notes</th><th></th></tr></thead><tbody>' +
     rows.map(r => '<tr><td>' + esc(r.logged_on) + '</td><td>' + esc(r.label) + '</td><td>' + Number(r.value) +
-      '</td><td>' + esc(r.notes) + '</td><td><button class="secondary" onclick="removeEntry(' + Number(r.id) + ')">Delete</button></td></tr>'
+      '</td><td>' + esc(r.notes) + '</td><td><button class="secondary" data-click="removeEntry:' + Number(r.id) + '">Delete</button></td></tr>'
     ).join('') + '</tbody></table>';
 }
 async function refresh() {

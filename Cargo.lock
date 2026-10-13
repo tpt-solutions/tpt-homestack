@@ -3250,6 +3250,7 @@ dependencies = [
  "http-body-util",
  "hyper-util",
  "inventory",
+ "libc",
  "rusqlite",
  "serde",
  "serde_json",
@@ -3268,6 +3269,7 @@ dependencies = [
  "ureq",
  "uuid",
  "wasmi",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]

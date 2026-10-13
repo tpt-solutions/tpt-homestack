@@ -33,7 +33,7 @@ const SETUP: &str = r##"
   <p class="muted">1. Create the webhook that sensors will post to. The secret is shown once; store it in the sender.</p>
   <div class="row" style="gap:8px;flex-wrap:wrap">
     <input id="hook-name" maxlength="50" placeholder="webhook name, e.g. house-sensors" style="max-width:280px">
-    <button onclick="createHook()">Create webhook</button>
+    <button data-click="createHook">Create webhook</button>
   </div>
   <div id="hook-result"></div>
   <p class="muted" style="margin-top:12px">2. Choose the webhook as the feed and set the rules. Quiet hours are in the server's time zone; the server's clock is <span id="server-clock">…</span>.</p>
@@ -42,7 +42,7 @@ const SETUP: &str = r##"
     <label>Quiet from (hour) <input id="qfrom" type="number" min="0" max="23" style="max-width:90px"></label>
     <label>to (hour) <input id="qto" type="number" min="0" max="23" style="max-width:90px"></label>
     <label>Silent after (hours) <input id="silent" type="number" min="1" max="720" style="max-width:110px"></label>
-    <button onclick="saveSettings()">Save</button>
+    <button data-click="saveSettings">Save</button>
   </div>
   <div id="settings-msg"></div>
 </div>

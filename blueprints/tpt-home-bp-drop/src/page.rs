@@ -31,7 +31,7 @@ fn content_fragment() -> String {
          <h2 style=\"margin-top:0\">Upload</h2>\n\
          <div class=\"row\">\n\
          <input type=\"file\" id=\"file\" style=\"max-width:340px\">\n\
-         <button onclick=\"doUpload()\">Upload</button>\n\
+         <button data-click=\"doUpload\">Upload</button>\n\
          <span class=\"muted\" id=\"upstatus\"></span>\n</div>\n\
          <div id=\"msg\"></div>\n</div>\n\
          <div id=\"list\"></div>\n\
@@ -55,7 +55,7 @@ async function doUpload() {
   const fd = new FormData(); fd.append('file', input.files[0]);
   document.getElementById('upstatus').textContent = 'uploading…';
   try {
-    const r = await fetch('/api/drop/upload', { method: 'POST', body: fd });
+    const r = await fetch('/api/drop/upload', { method: 'POST', body: fd, headers: { 'X-TPT-Request': '1' } });
     const j = await r.json().catch(() => ({}));
     if (!r.ok) throw new Error(j.error || r.statusText);
     document.getElementById('upstatus').textContent = 'done';
@@ -88,8 +88,8 @@ async function loadList() {
           <strong>${esc(f.filename)}</strong>
           <span class="row">
             <a class="btn" href="/api/drop/${f.id}/download">Download</a>
-            <button class="secondary" onclick="makeShare(${f.id})">Share</button>
-            <button class="danger" onclick="delFile(${f.id})">Delete</button>
+            <button class="secondary" data-click="makeShare:${f.id}">Share</button>
+            <button class="danger" data-click="delFile:${f.id}">Delete</button>
           </span>
         </div>
         <div class="muted">${fmtSize(f.size)} · ${new Date(f.created_at * 1000).toLocaleString()}

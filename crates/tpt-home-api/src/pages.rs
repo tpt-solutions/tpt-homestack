@@ -132,7 +132,7 @@ const JOBS_BODY: &str = r##"
 <div class="card">
   <div class="spread">
     <span class="muted">Scheduled background jobs. Refreshes every 10 seconds; history resets on restart.</span>
-    <button class="secondary" onclick="load()">Refresh</button>
+    <button class="secondary" data-click="load">Refresh</button>
   </div>
   <div id="msg"></div>
   <div id="jobs"><p class="muted">Loading…</p></div>
@@ -153,13 +153,13 @@ async function load() {
     document.getElementById('msg').innerHTML = '';
     document.getElementById('jobs').innerHTML = jobs.length === 0
       ? '<p class="muted">No scheduled jobs are registered.</p>'
-      : '<table><thead><tr><th>Blueprint</th><th>Job</th><th>Every</th><th>Last started</th><th>Last finished</th><th>Last result</th><th>Next run</th><th>Runs</th><th>Failures</th></tr></thead><tbody>' +
+      : '<div style="overflow-x:auto"><table><thead><tr><th>Blueprint</th><th>Job</th><th>Every</th><th>Last started</th><th>Last finished</th><th>Last result</th><th>Next run</th><th>Runs</th><th>Failures</th></tr></thead><tbody>' +
         jobs.map(j =>
           '<tr><td>' + esc(j.blueprint) + '</td><td>' + esc(j.name) + '</td><td>' + Number(j.every_secs) + ' s</td>' +
           '<td>' + esc(when(j.last_started_at)) + '</td><td>' + esc(when(j.last_finished_at)) + '</td>' +
           '<td>' + outcome(j.last_outcome) + (j.last_error ? '<div class="muted">' + esc(j.last_error) + '</div>' : '') + '</td>' +
           '<td>' + esc(when(j.next_run_at)) + '</td><td>' + Number(j.runs) + '</td><td>' + Number(j.failures) + '</td></tr>'
-        ).join('') + '</tbody></table>';
+        ).join('') + '</tbody></table></div>';
   } catch (e) {
     document.getElementById('msg').innerHTML = '<div class="msg error">' + esc(e.message) + '</div>';
   }

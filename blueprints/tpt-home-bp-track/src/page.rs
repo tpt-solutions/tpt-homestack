@@ -28,13 +28,13 @@ fn content_fragment() -> String {
     format!(
         "<div class=\"card\">\n\
          <div class=\"spread\">\n<h2 style=\"margin:0\">Tables</h2>\n\
-         <button onclick=\"showNewTable()\">New table</button>\n</div>\n\
+         <button data-click=\"showNewTable\">New table</button>\n</div>\n\
          <div id=\"newtable\" style=\"display:none\">\n\
          <label for=\"tname\">Table name</label><input id=\"tname\" style=\"max-width:280px\">\n\
          <div id=\"fields\"></div>\n\
          <div class=\"row\" style=\"margin-top:8px\">\n\
-         <button class=\"secondary\" onclick=\"addFieldRow()\">+ field</button>\n\
-         <button onclick=\"createTable()\">Create</button>\n</div>\n</div>\n\
+         <button class=\"secondary\" data-click=\"addFieldRow\">+ field</button>\n\
+         <button data-click=\"createTable\">Create</button>\n</div>\n</div>\n\
          <div id=\"msg\"></div>\n</div>\n\
          <div id=\"tables\"></div>\n\
          <div id=\"rowsview\"></div>\n\
@@ -84,8 +84,8 @@ async function loadTables() {
         <div class="spread">
           <strong>${esc(t.name)}</strong>
           <span class="row">
-            <button class="secondary" onclick="openRows(${t.id})">Open</button>
-            <button class="danger" onclick="delTable(${t.id})">Delete</button>
+            <button class="secondary" data-click="openRows:${t.id}">Open</button>
+            <button class="danger" data-click="delTable:${t.id}">Delete</button>
           </span>
         </div>
         <div class="muted">${t.fields.map(f => esc(f.name) + ' (' + f.kind + ')').join(' · ')}</div>
@@ -106,10 +106,10 @@ async function openRows(id) {
       const v = r['f_' + f.id];
       return '<td>' + esc(v === null || v === undefined ? '' : String(v)) + '</td>';
     }).join('') +
-      '<td><button class="danger" onclick="delRow(' + id + ',' + r.id + ')">×</button></td></tr>').join('');
+      '<td><button class="danger" data-click="delRow:' + id + ':' + r.id + '">×</button></td></tr>').join('');
     const addForm = '<div class="row" style="margin-top:10px">' +
       t.fields.map(f => `<input id="add_${f.id}" placeholder="${esc(f.name)} (${f.kind})" style="max-width:170px">`).join('') +
-      '<button onclick="addRow(' + id + ')">Add row</button></div>';
+      '<button data-click="addRow:' + id + '">Add row</button></div>';
     document.getElementById('rowsview').innerHTML =
       '<div class="card"><h2 style="margin-top:0">' + esc(t.name) + '</h2>' +
       '<div style="overflow-x:auto"><table><thead>' + headers + '</thead><tbody>' + body + '</tbody></table></div>' + addForm + '</div>';

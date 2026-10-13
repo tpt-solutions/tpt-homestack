@@ -40,17 +40,30 @@ fn setup() -> (tempfile::TempDir, PathBuf) {
     (root, data_dir)
 }
 
-/// The only `tpt-*.db` file in a backup directory.
-fn backup_file(dir: &Path) -> PathBuf {
+/// Every `tpt-*.db` file in a backup directory, one folder per backup.
+fn backup_files(dir: &Path) -> Vec<PathBuf> {
     let mut found: Vec<PathBuf> = std::fs::read_dir(dir)
         .unwrap()
         .map(|e| e.unwrap().path())
+        .filter(|folder| folder.is_dir())
+        .flat_map(|folder| {
+            std::fs::read_dir(folder)
+                .unwrap()
+                .map(|e| e.unwrap().path())
+        })
         .filter(|p| {
             p.file_name()
                 .and_then(|n| n.to_str())
                 .is_some_and(|n| n.starts_with("tpt-") && n.ends_with(".db"))
         })
         .collect();
+    found.sort();
+    found
+}
+
+/// The only `tpt-*.db` file in a backup directory.
+fn backup_file(dir: &Path) -> PathBuf {
+    let mut found = backup_files(dir);
     assert_eq!(found.len(), 1, "expected one backup in {}", dir.display());
     found.remove(0)
 }
@@ -227,5 +240,53 @@ fn restore_of_a_missing_file_fails() {
         stderr(&out).contains("backup not found"),
         "{}",
         stderr(&out)
+    );
+}
+
+#[test]
+fn each_backup_keeps_its_own_uploads() {
+    let (root, data_dir) = setup();
+    let uploads = data_dir.join("uploads").join("drop");
+    std::fs::create_dir_all(&uploads).unwrap();
+    std::fs::write(uploads.join("keep.bin"), "first").unwrap();
+    let backups = root.path().join("backups");
+
+    let first = tpt(
+        &data_dir,
+        &["backup", "--out-dir", backups.to_str().unwrap()],
+    );
+    assert!(first.status.success(), "backup failed: {}", stderr(&first));
+
+    // Backup folders are named by the second, so wait for the next one.
+    std::thread::sleep(std::time::Duration::from_millis(1100));
+    std::fs::write(uploads.join("keep.bin"), "second").unwrap();
+    let second = tpt(
+        &data_dir,
+        &["backup", "--out-dir", backups.to_str().unwrap()],
+    );
+    assert!(
+        second.status.success(),
+        "backup failed: {}",
+        stderr(&second)
+    );
+
+    let databases = backup_files(&backups);
+    assert_eq!(databases.len(), 2, "one database per backup");
+    let saved: Vec<String> = databases
+        .iter()
+        .map(|db| {
+            let file = db
+                .parent()
+                .unwrap()
+                .join("uploads")
+                .join("drop")
+                .join("keep.bin");
+            std::fs::read_to_string(file).unwrap()
+        })
+        .collect();
+    assert_eq!(
+        saved,
+        ["first", "second"],
+        "older backups keep their uploads"
     );
 }

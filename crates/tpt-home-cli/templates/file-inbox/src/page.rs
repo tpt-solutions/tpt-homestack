@@ -24,7 +24,7 @@ const BODY: &str = r##"
 <div class="card">
   <h2 style="margin-top:0">Upload a file</h2>
   <input id="file" type="file">
-  <div class="row" style="margin-top:8px"><button onclick="upload()">Upload</button></div>
+  <div class="row" style="margin-top:8px"><button data-click="upload">Upload</button></div>
   <div id="msg"></div>
 </div>
 <div class="card">
@@ -48,7 +48,7 @@ async function load() {
     list.innerHTML = '<table><thead><tr><th>Name</th><th>Size</th><th>Type</th><th></th></tr></thead><tbody>' +
       rows.map(f => '<tr><td>' + esc(f.original_name) + '</td><td>' + human(Number(f.size)) + '</td><td>' + esc(f.mime) +
         '</td><td><a href="/api/<NAME>/files/' + Number(f.id) + '">Download</a> ' +
-        '<button class="secondary" onclick="removeFile(' + Number(f.id) + ')">Delete</button></td></tr>'
+        '<button class="secondary" data-click="removeFile:' + Number(f.id) + '">Delete</button></td></tr>'
       ).join('') + '</tbody></table>';
   } catch (e) { showError(e); }
 }
@@ -58,7 +58,7 @@ async function upload() {
   const form = new FormData();
   form.append('file', input.files[0]);
   try {
-    const r = await fetch('/api/<NAME>/files', {method: 'POST', body: form});
+    const r = await fetch('/api/<NAME>/files', {method: 'POST', body: form, headers: {'X-TPT-Request': '1'}});
     const j = await r.json().catch(() => ({}));
     if (!r.ok) throw new Error(j.error || r.statusText);
     input.value = '';

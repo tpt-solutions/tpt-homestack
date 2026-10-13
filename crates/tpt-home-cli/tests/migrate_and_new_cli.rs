@@ -43,7 +43,11 @@ fn migrate_is_idempotent_after_init() {
     );
 
     let second = tpt(&data_dir, &["migrate"]);
-    assert!(second.status.success(), "migrate failed: {}", stderr(&second));
+    assert!(
+        second.status.success(),
+        "migrate failed: {}",
+        stderr(&second)
+    );
     assert!(stdout(&second).contains("database is up to date"));
 }
 
