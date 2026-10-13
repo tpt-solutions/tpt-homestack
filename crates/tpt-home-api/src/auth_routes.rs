@@ -105,6 +105,7 @@ pub async fn change_password(
         .await
         .map_err(|_| ApiError::Unauthorized)?;
     auth::user::set_password(&db, user.id, &body.new_password).await?;
+    tpt_home_core::settings::set_must_change_password(&db, user.id, false).await?;
     Ok(Json(json!({ "ok": true, "relogin": true })))
 }
 

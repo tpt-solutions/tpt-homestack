@@ -8,6 +8,7 @@
 //! (Phase 3): the api crate only calls [`page`], [`login_page`] and friends,
 //! so the rendering backend can change without touching routing.
 
+pub mod components;
 mod view;
 
 pub use view::{UserRow, UserView};
@@ -122,8 +123,9 @@ fn shell_open(title: &str) -> String {
         "<!doctype html>\n<html lang=\"en\">\n<head>\n<meta charset=\"utf-8\">\n\
          <meta name=\"viewport\" content=\"width=device-width, initial-scale=1\">\n\
          <link rel=\"icon\" href=\"data:,\">\n\
-         <title>{} · tpt-homestack</title>\n<style>{CSS}</style>\n</head>\n<body>",
-        esc(title)
+         <title>{} · tpt-homestack</title>\n<style>{CSS}{}</style>\n</head>\n<body>",
+        esc(title),
+        components::COMPONENTS_CSS
     )
 }
 
@@ -169,14 +171,16 @@ pub fn page(
     user: &UserView,
     content: &str,
 ) -> String {
+    let toasts = components::toast_region();
     format!(
-        "{}\n<div class=\"layout\">\n{}\n<main class=\"main\">\n<h1>{}</h1>\n{}\n</main>\n</div>\n<script>\n\
+        "{}\n<div class=\"layout\">\n{}\n<main class=\"main\">\n<h1>{}</h1>\n{}\n</main>\n</div>\n{toasts}\n<script>\n\
          async function postJson(url, body) {{\n  const r = await fetch(url, {{method:'POST', headers:{{'Content-Type':'application/json'}}, body: JSON.stringify(body)}});\n  const j = await r.json().catch(() => ({{}}));\n  if (!r.ok) throw new Error(j.error || r.statusText);\n  return j;\n}}\n\
-         function logout() {{ postJson('/api/auth/logout', {{}}).finally(() => location.href = '/login'); return false; }}\n{DISPATCH_JS}</script>\n</body>\n</html>",
+         function logout() {{ postJson('/api/auth/logout', {{}}).finally(() => location.href = '/login'); return false; }}\n{DISPATCH_JS}{}</script>\n</body>\n</html>",
         shell_open(title),
         sidebar(nav, active, user),
         esc(title),
-        content
+        content,
+        components::COMPONENTS_JS
     )
 }
 
@@ -303,6 +307,15 @@ mod settings_tests {
 
 /// Admin · users page.
 pub fn users_admin_content(users: &[UserRow]) -> String {
+    let pw_modal = components::modal(
+        "pw-modal",
+        "Reset password",
+        &format!(
+            "{}\n{}",
+            components::field("New password (8+ characters)", "pw-new", "password", ""),
+            components::button("Set password", "savePw", components::ButtonKind::Primary)
+        ),
+    );
     let rows: String = users
         .iter()
         .map(|u| {
@@ -347,13 +360,15 @@ pub fn users_admin_content(users: &[UserRow]) -> String {
          <select id=\"nr\"><option value=\"user\">user</option><option value=\"admin\">admin</option></select>\n\
          <button type=\"submit\">Create</button></div>\n</form>\n</div>\n\
          <div class=\"card\">\n<table>\n<thead><tr><th>#</th><th>User</th><th>Status</th><th>Role</th><th>Actions</th></tr></thead>\n\
-         <tbody>{rows}</tbody>\n</table>\n</div>\n\
+         <tbody>{rows}</tbody>\n</table>\n</div>\n{pw_modal}\n\
          <script>\nasync function api(url, method, body) {{\n  const r = await fetch(url, {{method, headers:{{'Content-Type':'application/json'}}, body: body ? JSON.stringify(body) : undefined}});\n  const j = await r.json().catch(() => ({{}}));\n  if (!r.ok) throw new Error(j.error || r.statusText);\n  return j;\n}}\n\
-         function reload() {{ location.reload(); }}\nasync function doCreate(ev) {{ ev.preventDefault(); try {{ await api('/api/admin/users', 'POST', {{username: nu.value, password: np.value, role: nr.value}}); reload(); }} catch (e) {{ alert(e.message); }} return false; }}\n\
-         async function setRole(id, ev, el) {{ try {{ await api('/api/admin/users/' + id, 'PATCH', {{role: el.value}}); reload(); }} catch (e) {{ alert(e.message); }} }}\n\
-         async function setDisabled(id, flag) {{ try {{ await api('/api/admin/users/' + id, 'PATCH', {{disabled: flag === 'true'}}); reload(); }} catch (e) {{ alert(e.message); }} }}\n\
-         async function resetPw(id) {{ const pw = prompt('new password (min 8 chars)'); if (!pw || pw.length < 8) return; try {{ await api('/api/admin/users/' + id, 'PATCH', {{password: pw}}); alert('password updated'); }} catch (e) {{ alert(e.message); }} }}\n\
-         async function delUser(id) {{ if (!confirm('Delete user ' + id + '?')) return; try {{ await api('/api/admin/users/' + id, 'DELETE'); reload(); }} catch (e) {{ alert(e.message); }} }}\n</script>"
+         function reload() {{ location.reload(); }}\nasync function doCreate(ev) {{ ev.preventDefault(); try {{ await api('/api/admin/users', 'POST', {{username: nu.value, password: np.value, role: nr.value}}); reload(); }} catch (e) {{ toast(e.message, false); }} return false; }}\n\
+         async function setRole(id, ev, el) {{ try {{ await api('/api/admin/users/' + id, 'PATCH', {{role: el.value}}); reload(); }} catch (e) {{ toast(e.message, false); }} }}\n\
+         async function setDisabled(id, flag) {{ try {{ await api('/api/admin/users/' + id, 'PATCH', {{disabled: flag === 'true'}}); reload(); }} catch (e) {{ toast(e.message, false); }} }}\n\
+         let pwTarget = null;
+async function resetPw(id) {{ pwTarget = id; document.getElementById('pw-new').value = ''; openModal('pw-modal'); }}
+async function savePw() {{ const pw = document.getElementById('pw-new').value; if (pw.length < 8) {{ toast('password must be at least 8 characters', false); return; }} try {{ await api('/api/admin/users/' + pwTarget, 'PATCH', {{password: pw}}); closeModal('pw-modal'); toast('password updated', true); }} catch (e) {{ toast(e.message, false); }} }}
+         async function delUser(id) {{ if (!confirm('Delete user ' + id + '?')) return; try {{ await api('/api/admin/users/' + id, 'DELETE'); reload(); }} catch (e) {{ toast(e.message, false); }} }}\n</script>"
     )
 }
 
@@ -632,7 +647,7 @@ const WELCOME_BODY: &str = r##"
 <p class="muted">Five minutes to set this up. Each step can be changed later from the Admin pages.</p>
 <div class="card">
   <h2 style="margin-top:0">1. Name this server</h2>
-  <form onsubmit="return saveName(event)">
+  <form>
     <div class="spread">
       <input id="sn" value="__NAME__" maxlength="64" required aria-label="Server name">
       <button type="submit">Save name</button>
@@ -644,7 +659,7 @@ const WELCOME_BODY: &str = r##"
   <h2 style="margin-top:0">2. Family accounts</h2>
   <p class="muted">Each person gets their own account and signs in with it.</p>
   <ul id="users">__USERS__</ul>
-  <form onsubmit="return addUser(event)">
+  <form>
     <div class="spread">
       <input id="nu" placeholder="username" required aria-label="Username">
       <input id="np" type="password" placeholder="password (8+ characters)" minlength="8" required aria-label="Password">
@@ -706,4 +721,7 @@ async function finish() {
     location.href = '/dashboard';
   } catch (e) { note('f-msg', e.message, false); }
 }
+// Inline onsubmit attributes are blocked by the page's CSP, so forms are wired here.
+document.getElementById('sn').form.addEventListener('submit', saveName);
+document.getElementById('nu').form.addEventListener('submit', addUser);
 </script>"##;

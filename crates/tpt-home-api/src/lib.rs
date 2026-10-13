@@ -13,10 +13,12 @@ pub mod auth_routes;
 pub mod backup;
 pub mod backup_routes;
 pub mod pages;
+pub mod safety;
 pub mod settings_routes;
 pub mod webhook_routes;
 
 use std::net::SocketAddr;
+use std::sync::Arc;
 use std::time::Duration;
 
 use axum::Extension;
@@ -58,8 +60,58 @@ pub async fn init_server(cfg: Config) -> anyhow::Result<DbPool> {
         anyhow::bail!("config already initialised");
     }
     let db = db::connect(&cfg.db_path()).await?;
-    migrate::run_all(&db).await?;
+    let report = prepare_database(&db, &cfg, false).await?;
+    if let Some(copy) = &report.snapshot {
+        tracing::info!(copy = %copy.display(), "saved a copy of the database before upgrading");
+    }
     Ok(db)
+}
+
+/// What [`migrate_database`] found and did.
+#[derive(Debug)]
+pub struct MigrateReport {
+    /// Migrations this binary would apply (applied now, unless dry run).
+    pub pending: Vec<String>,
+    /// Migrations applied by this call, in order.
+    pub applied: Vec<String>,
+    /// The copy of the database taken before changing it, if there was one.
+    pub snapshot: Option<std::path::PathBuf>,
+}
+
+/// Bring the database in `cfg` up to date: refuse a database from a newer
+/// version, keep a copy of an existing database before changing it, then
+/// apply the pending migrations. With `dry_run`, only report what is pending.
+pub async fn migrate_database(cfg: &Config, dry_run: bool) -> anyhow::Result<MigrateReport> {
+    cfg.ensure_dirs()?;
+    let db = db::connect(&cfg.db_path()).await?;
+    prepare_database(&db, cfg, dry_run).await
+}
+
+async fn prepare_database(
+    db: &DbPool,
+    cfg: &Config,
+    dry_run: bool,
+) -> anyhow::Result<MigrateReport> {
+    migrate::check_compatible(db).await?;
+    let pending = migrate::pending_keys(db).await?;
+    if dry_run || pending.is_empty() {
+        return Ok(MigrateReport {
+            pending,
+            applied: Vec::new(),
+            snapshot: None,
+        });
+    }
+    let snapshot = if migrate::has_history(db).await? {
+        Some(backup::upgrade_snapshot(db, cfg).await?)
+    } else {
+        None
+    };
+    let applied = migrate::run_all(db).await?;
+    Ok(MigrateReport {
+        pending,
+        applied,
+        snapshot,
+    })
 }
 
 /// Build the full application router. Public for integration tests.
@@ -157,6 +209,13 @@ pub fn build_router(db: DbPool, cfg: &Config) -> Router {
         .merge(registry::apply_routes(Router::new()))
         .merge(registry::apply_ui_routes(Router::new()))
         .layer(Extension(shared_cfg))
+        .layer(axum::middleware::from_fn_with_state(
+            Arc::new(safety::Safety {
+                db: db.clone(),
+                exposed: cfg.exposed(),
+            }),
+            safety::guard,
+        ))
         .layer(axum::middleware::from_fn_with_state(
             db.clone(),
             mw::auth_resolver,

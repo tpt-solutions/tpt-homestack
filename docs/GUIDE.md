@@ -90,6 +90,13 @@ tpt-home run                                        # serves on http://127.0.0.1
 browser setup page at `/setup` only works until the first admin exists. Keep
 the password somewhere safe; you can reset it with `tpt-home user reset-password`.
 
+The first time the admin opens the Dashboard, the **Welcome** page
+(`/welcome`) walks through three things: naming the server, adding a family
+account for each person, and finishing. Remote access is not set up on that
+page; run `tpt-home remote status` for what is ready. Until the admin clicks
+**Finish setup**, the Dashboard keeps redirecting to this page. The page stays
+at `/welcome` afterwards, for changing the name or adding accounts.
+
 The server listens on `127.0.0.1` only by default. To reach it from other
 devices on your home network, change `host` in `config.toml`, and read
 [DEPLOYMENT.md](DEPLOYMENT.md) first. Remote access from outside the home is
@@ -127,6 +134,13 @@ tpt-home user remove alice --yes
 There are two roles. An **admin** can manage users, install apps, and see the
 job status page. A **user** can use the apps. The server refuses to remove or
 demote the last admin.
+
+**Passwords you set for someone else.** When an admin creates an account, resets
+a password, or the first start generates the admin password, that person must
+choose their own password at their next sign-in. Until they do, pages redirect
+to Settings and API calls return 403 with `password change required`. A
+password you choose for yourself (the setup wizard's admin, or
+`tpt-home init --admin-password`) is not affected.
 
 ### API tokens
 
@@ -219,7 +233,8 @@ copy somewhere else as well: scheduled backups sit on the same disk.
 - **An upload is refused with 415**: a script is uploading without the
   `X-TPT-Request: 1` header. Add it; the browser pages already send it.
 - **The server will not start after an update**: check the log. Migrations
-  only move forward, so restore the backup taken before the update and report
+  only move forward. A copy of the database from before the upgrade is in
+  `data/backups/upgrade/`; restore it (or a `backup`) and report
   the error.
 - The log is written to standard error. Raise `log_level` to `debug` only
   while investigating.

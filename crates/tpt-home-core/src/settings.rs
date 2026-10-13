@@ -45,6 +45,32 @@ pub async fn wizard_done(db: &DbPool) -> bool {
     matches!(get(db, WIZARD_DONE).await, Ok(Some(v)) if v == "1")
 }
 
+fn must_change_key(user_id: i64) -> String {
+    format!("must_change_password:{user_id}")
+}
+
+/// Mark a user whose password was set by someone else (an admin), so they must
+/// choose their own before using the app. `false` clears the mark.
+pub async fn set_must_change_password(
+    db: &DbPool,
+    user_id: i64,
+    required: bool,
+) -> Result<(), sqlx::Error> {
+    if required {
+        set(db, &must_change_key(user_id), "1").await
+    } else {
+        sqlx::query("DELETE FROM core_kv WHERE key = ?")
+            .bind(must_change_key(user_id))
+            .execute(db)
+            .await?;
+        Ok(())
+    }
+}
+
+pub async fn must_change_password(db: &DbPool, user_id: i64) -> bool {
+    matches!(get(db, &must_change_key(user_id)).await, Ok(Some(v)) if v == "1")
+}
+
 /// A usable server name: trimmed, 1 to 64 characters, no control characters.
 pub fn valid_server_name(name: &str) -> Option<String> {
     let name = name.trim();

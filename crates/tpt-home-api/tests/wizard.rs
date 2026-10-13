@@ -111,6 +111,30 @@ async fn user_cookie(app: &axum::Router, admin: &str) -> String {
     )
     .await;
     assert_eq!(res.status(), StatusCode::OK);
+    // An admin set this password, so alice chooses her own before use.
+    let cookie = cookie_from(&res);
+    let res = send(
+        app,
+        json_req(
+            "POST",
+            "/api/auth/change-password",
+            json!({"current": USER_PW, "new_password": "alice-chosen-pass"}),
+            &cookie,
+        ),
+    )
+    .await;
+    assert_eq!(res.status(), StatusCode::OK);
+    let res = send(
+        app,
+        json_req(
+            "POST",
+            "/api/auth/login",
+            json!({"username": "alice", "password": "alice-chosen-pass"}),
+            "",
+        ),
+    )
+    .await;
+    assert_eq!(res.status(), StatusCode::OK);
     cookie_from(&res)
 }
 
@@ -236,6 +260,8 @@ async fn the_wizard_page_shows_steps_and_escapes_the_name() {
     );
     assert!(!html.contains("<b>Hall</b>"));
     assert!(html.contains("admin")); // the signed-in admin is listed
+    // The CSP blocks inline event attributes, so the page must not use them.
+    assert!(!html.contains(" onsubmit=") && !html.contains(" onclick="));
 }
 
 #[tokio::test]

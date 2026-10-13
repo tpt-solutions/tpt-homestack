@@ -172,3 +172,43 @@ fn new_plugin_rejects_a_blueprint_template_and_a_bad_id() {
     assert!(!bad.status.success());
     assert!(!root.path().join("plugins").exists());
 }
+
+#[test]
+fn migrate_reports_what_it_applied_and_keeps_a_copy_first() {
+    let root = tempfile::tempdir().unwrap();
+    let data = root.path().join("data");
+    let init = tpt(&data, &["init", "--admin-password", ADMIN_PASSWORD]);
+    assert!(init.status.success(), "{}", stderr(&init));
+    assert!(stdout(&tpt(&data, &["migrate"])).contains("database is up to date"));
+
+    // Forget one core migration, as an older version would have.
+    tokio::runtime::Runtime::new().unwrap().block_on(async {
+        let pool = tpt_home_core::db::connect(&data.join("tpt.db"))
+            .await
+            .unwrap();
+        sqlx::query("DELETE FROM _tpt_schema_migrations WHERE key = ?")
+            .bind("tpt-home-core:004_api_tokens")
+            .execute(&pool)
+            .await
+            .unwrap();
+    });
+
+    let dry = tpt(&data, &["migrate", "--dry-run"]);
+    assert!(dry.status.success(), "{}", stderr(&dry));
+    assert!(
+        stdout(&dry).contains("1 migration(s) would be applied"),
+        "{}",
+        stdout(&dry)
+    );
+    assert!(stdout(&dry).contains("004_api_tokens"));
+
+    let run = tpt(&data, &["migrate"]);
+    assert!(run.status.success(), "{}", stderr(&run));
+    let text = stdout(&run);
+    assert!(text.contains("copy saved before upgrading"), "{text}");
+    assert!(
+        text.contains("applied tpt-home-core:004_api_tokens"),
+        "{text}"
+    );
+    assert!(data.join("backups").join("upgrade").is_dir());
+}

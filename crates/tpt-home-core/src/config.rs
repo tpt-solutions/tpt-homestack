@@ -115,6 +115,13 @@ impl Config {
         Ok(())
     }
 
+    /// True when the server can be reached from beyond this machine: it
+    /// listens on a non-loopback address, or it trusts a proxy (a tunnel).
+    /// The UI shows a warning while this holds.
+    pub fn exposed(&self) -> bool {
+        self.trust_proxy || !matches!(self.host.as_str(), "127.0.0.1" | "localhost" | "::1")
+    }
+
     /// Effective session TTL.
     pub fn session_ttl(&self) -> std::time::Duration {
         std::time::Duration::from_secs(self.session_ttl_hours * 3600)

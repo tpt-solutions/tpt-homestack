@@ -79,8 +79,17 @@ tpt-home restore <backup.db>   # stop the server first
 ```
 
 Upgrades: replace the binary, `systemctl restart tpt-home`. Migrations are
-forward-only and run automatically at startup (`tpt-home migrate` to apply
-them without serving). Always take a `backup` before upgrading.
+forward-only and run automatically at startup. Before the first pending
+migration changes an existing database, the server saves a copy of it to
+`data/backups/upgrade/` and checks that copy. Still take a `backup` first.
+
+```sh
+tpt-home migrate --dry-run   # list what an upgrade would change
+tpt-home migrate             # apply it (keeps a copy first)
+```
+
+A database written by a newer version is refused, and the server does not
+start. Install the newer binary, or restore a backup from before that upgrade.
 
 ## 5. Hardening checklist
 

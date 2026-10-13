@@ -40,7 +40,7 @@ if (!browser) {
   process.exit(2);
 }
 
-const PAGES = ['/dashboard', '/settings', '/admin/users', '/admin/jobs', '/notes', '/track', '/drop'];
+const PAGES = ['/dashboard', '/welcome', '/settings', '/admin/users', '/admin/jobs', '/notes', '/track', '/drop'];
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
 async function waitFor(fn, what, timeoutMs = 15000) {
@@ -219,10 +219,17 @@ async function main() {
     const pw = {};
     await evaluate(`document.getElementById('cur').value = 'not-the-password'; document.getElementById('new').value = 'another-long-password';`);
     pw.submit = await evaluate(`(() => { const f = document.querySelector('form'); f.requestSubmit(); return true; })()`);
-    await sleep(800);
-    pw.refusalShown = await evaluate(`document.getElementById('pwmsg').innerText.trim().length > 0`);
+    // Poll rather than sleep: the server checks the current password with
+    // Argon2, which takes longer than a fixed delay in a debug build.
+    let refusal = '';
+    for (let i = 0; i < 60 && !refusal; i++) {
+      await sleep(250);
+      refusal = await evaluate(`document.getElementById('pwmsg').innerText.trim()`);
+    }
+    pw.refusalShown = refusal.length > 0;
     pw.stillOnPage = await evaluate(`location.pathname === '/settings'`);
-    report.workflows.settings = { steps: pw, ok: Object.values(pw).every(Boolean), logs: logs.slice() };
+    const pwText = await evaluate(`document.getElementById('pwmsg').innerText`);
+    report.workflows.settings = { steps: pw, ok: Object.values(pw).every(Boolean), logs: logs.slice(), pageMessage: pwText };
 
     // Workflow: track. Create a table with two fields, add a row, delete the table.
     await visit('/track');
@@ -296,6 +303,21 @@ async function main() {
       const row = [...document.querySelectorAll('tbody tr')].find(r => r.innerText.includes(${JSON.stringify(uname)}));
       return !!row && row.querySelector('select').value === 'admin';
     })()`);
+    // The reset-password modal: open it from the row, set a password, and
+    // expect a toast. Replaces the blocking prompt and alert the page used.
+    us.resetModalOpened = await evaluate(`(() => {
+      const row = [...document.querySelectorAll('tbody tr')].find(r => r.innerText.includes(${JSON.stringify(uname)}));
+      const b = row && [...row.querySelectorAll('button')].find(x => x.textContent.trim() === 'Reset pw');
+      if (!b) return false;
+      b.click();
+      return true;
+    })()`);
+    await sleep(300);
+    us.modalOpen = await evaluate(`document.getElementById('pw-modal').open === true`);
+    await evaluate(`document.getElementById('pw-new').value = 'reset-by-admin-1';`);
+    await evaluate(`[...document.querySelectorAll('#pw-modal button')].find(b => b.textContent.trim() === 'Set password').click(); true`);
+    await sleep(800);
+    us.toastShown = await evaluate(`[...document.querySelectorAll('#toasts .toast')].some(t => t.textContent.includes('password updated'))`);
     us.deleted = await evaluate(`window.confirm = () => true; (() => {
       const row = [...document.querySelectorAll('tbody tr')].find(r => r.innerText.includes(${JSON.stringify(uname)}));
       const btn = row && [...row.querySelectorAll('button')].find(b => b.textContent.trim() === 'Delete');
@@ -307,6 +329,32 @@ async function main() {
     await visit('/admin/users');
     us.gone = await evaluate(`![...document.querySelectorAll('tbody tr')].some(r => r.innerText.includes(${JSON.stringify(uname)}))`);
     report.workflows.users = { steps: us, ok: Object.values(us).every(Boolean), logs: logs.slice() };
+
+    // Workflow: first-run wizard. An unfinished wizard sends the admin from
+    // the Dashboard to /welcome. Name the server, add an account, and finish.
+    // If the wizard is already finished (a re-run), only the page is checked.
+    const wz = {};
+    await visit('/dashboard');
+    const wizardDone = await evaluate(`fetch('/api/settings/server').then(r => r.json()).then(j => j.wizard_done)`);
+    wz.redirectedOrFinished = wizardDone ? true : await evaluate(`location.pathname === '/welcome'`);
+    if (!wizardDone) {
+      const house = `Browser House ${Date.now() % 100000}`;
+      await evaluate(`document.getElementById('sn').value = ${JSON.stringify(house)};`);
+      await evaluate(`document.getElementById('sn').form.requestSubmit(); true`);
+      await sleep(800);
+      wz.nameSaved = await evaluate(`document.getElementById('sn-msg').innerText.includes('Saved')`);
+      const wuser = `wizard-user-${Date.now() % 100000}`;
+      await evaluate(`document.getElementById('nu').value = ${JSON.stringify(wuser)}; document.getElementById('np').value = 'wizard-pass-123';`);
+      await evaluate(`document.getElementById('nu').form.requestSubmit(); true`);
+      await sleep(800);
+      wz.accountListed = await evaluate(`document.getElementById('users').innerText.includes(${JSON.stringify(wuser)})`);
+      wz.finished = await clickButton('Finish setup');
+      await sleep(1000);
+      wz.onDashboard = await evaluate(`location.pathname === '/dashboard'`);
+    } else {
+      wz.pageShown = await visit('/welcome').then(() => evaluate(`!!document.getElementById('sn')`));
+    }
+    report.workflows.wizard = { steps: wz, ok: Object.values(wz).every(Boolean), logs: logs.slice() };
 
     cdp.close();
   } finally {

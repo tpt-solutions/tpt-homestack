@@ -392,8 +392,11 @@ fn plugin_install_and_use_over_http() {
 
     // A request without the multipart header is refused before the install
     // handler runs.
-    let refused = send(
-        &server,
+    // The server answers 415 without reading the body, then closes. A client
+    // still sending a large body can see the close as a reset instead of the
+    // answer. Either way the install did not run.
+    let refused = try_send(
+        server.port,
         "POST",
         "/api/plugins/install",
         &[
@@ -405,7 +408,19 @@ fn plugin_install_and_use_over_http() {
         ],
         &body,
     );
-    assert_eq!(refused.status, 415);
+    match refused {
+        Ok(response) => assert_eq!(response.status, 415),
+        Err(e) => assert!(
+            matches!(
+                e.kind(),
+                std::io::ErrorKind::ConnectionReset
+                    | std::io::ErrorKind::ConnectionAborted
+                    | std::io::ErrorKind::BrokenPipe
+            ),
+            "unexpected error: {e}\nserver log:\n{}",
+            server.log()
+        ),
+    }
 }
 
 /// Build a plugin from `dir` with the CLI and install it with no permissions,

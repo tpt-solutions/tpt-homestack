@@ -13,6 +13,7 @@ use serde_json::json;
 
 use tpt_home_core::auth::user::{self, AuthUser, Role};
 use tpt_home_core::prelude::*;
+use tpt_home_core::settings;
 
 #[derive(serde::Serialize)]
 pub struct UserView {
@@ -54,6 +55,8 @@ pub async fn create(
     let role = Role::parse(&body.role)
         .ok_or_else(|| ApiError::bad_request("role must be 'admin' or 'user'"))?;
     let created = user::create_user(&db, &body.username, &body.password, role).await?;
+    // The admin chose this password, so the new user picks their own at sign-in.
+    settings::set_must_change_password(&db, created.id, true).await?;
     Ok((axum::http::StatusCode::CREATED, Json(view(&created))))
 }
 
@@ -106,6 +109,9 @@ pub async fn update(
 
     if let Some(pw) = &body.password {
         user::set_password(&db, id, pw).await?;
+        // An admin reset: the user must replace it. Resetting your own password
+        // through this route is a choice, so no mark.
+        settings::set_must_change_password(&db, id, id != caller.id).await?;
     }
 
     let updated = user::get_user_by_id(&db, id).await?;

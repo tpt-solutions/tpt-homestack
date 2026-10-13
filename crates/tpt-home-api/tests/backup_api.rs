@@ -281,7 +281,20 @@ async fn backup_api_and_health_are_admin_only() {
     let res = send(&app, post_empty_json("/api/admin/backups", &user)).await;
     assert_eq!(res.status(), StatusCode::FORBIDDEN);
 
-    // The status page sends non-admins back to the dashboard.
+    // The status page sends non-admins back to the dashboard. The account was
+    // created by an admin, so it first chooses its own password.
+    let res = send(
+        &app,
+        json_req(
+            "POST",
+            "/api/auth/change-password",
+            json!({"current": USER_PW, "new_password": "alice-chosen-pass"}),
+            &user,
+        ),
+    )
+    .await;
+    assert_eq!(res.status(), StatusCode::OK);
+    let user = login_cookie(&app, "alice", "alice-chosen-pass").await;
     let res = send(&app, get("/admin/status", &user)).await;
     assert!(res.status().is_redirection());
     assert_eq!(res.headers()["location"], "/dashboard");
@@ -321,4 +334,28 @@ async fn status_page_renders_for_admins() {
     let html = String::from_utf8(body_bytes(res).await).unwrap();
     assert!(html.contains("Admin · Status"));
     assert!(html.contains("/api/admin/backups/upload"));
+}
+
+/// Sign in and return the session cookie.
+async fn login_cookie(app: &axum::Router, username: &str, password: &str) -> String {
+    let res = app
+        .clone()
+        .oneshot(json_req(
+            "POST",
+            "/api/auth/login",
+            json!({"username": username, "password": password}),
+            "",
+        ))
+        .await
+        .unwrap();
+    assert_eq!(res.status(), StatusCode::OK, "login as {username}");
+    res.headers()
+        .get("set-cookie")
+        .unwrap()
+        .to_str()
+        .unwrap()
+        .split(';')
+        .next()
+        .unwrap()
+        .to_string()
 }

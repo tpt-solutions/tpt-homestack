@@ -256,7 +256,7 @@ const STATUS_BODY: &str = r##"
 function esc(s) { const d = document.createElement('div'); d.textContent = s ?? ''; return d.innerHTML; }
 function when(unix) { return unix == null ? 'never' : new Date(Number(unix) * 1000).toLocaleString(); }
 function size(b) { return b < 1048576 ? (b / 1024).toFixed(1) + ' KiB' : (b / 1048576).toFixed(1) + ' MiB'; }
-function show(text, ok) { document.getElementById('msg').innerHTML = '<div class="msg ' + (ok ? 'ok' : 'error') + '">' + esc(text) + '</div>'; }
+function show(text, ok) { toast(text, ok); }
 async function api(path, opts) {
   const r = await fetch(path, opts || {});
   const body = await r.json().catch(() => ({}));

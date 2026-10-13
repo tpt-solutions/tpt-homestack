@@ -160,6 +160,26 @@ async fn write_backup(db: &DbPool, cfg: &Config, name: &str, folder: &Path) -> a
     Ok(())
 }
 
+/// Copy the database (not the uploads) before migrations change it. The copy
+/// goes in `<data>/backups/upgrade/`, which [`list`] and [`prune`] ignore, so
+/// it stays until someone deletes it. Delete it once the upgrade is confirmed.
+pub async fn upgrade_snapshot(db: &DbPool, cfg: &Config) -> anyhow::Result<PathBuf> {
+    let dir = default_dir(cfg).join("upgrade");
+    std::fs::create_dir_all(&dir)?;
+    let path = dir.join(format!("{}-{}.db", now(), std::process::id()));
+    let sql = format!("VACUUM INTO {}", sql_quote(&path.display().to_string()));
+    sqlx::query(&sql)
+        .execute(db)
+        .await
+        .with_context(|| format!("VACUUM INTO {}", path.display()))?;
+    anyhow::ensure!(
+        path.is_file(),
+        "VACUUM INTO wrote no file at {}",
+        path.display()
+    );
+    Ok(path)
+}
+
 /// Delete all but the newest `keep` backups in `dir`. Returns how many were
 /// deleted. `keep` is raised to 1: the newest backup is never deleted.
 pub fn prune(dir: &Path, keep: usize) -> anyhow::Result<usize> {

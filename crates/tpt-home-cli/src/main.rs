@@ -57,8 +57,12 @@ enum Command {
         #[arg(long, env = "TPT_HOME_ADMIN_PASSWORD")]
         admin_password: Option<String>,
     },
-    /// Apply pending migrations and exit.
-    Migrate,
+    /// Apply pending migrations and exit. A copy of the database is kept first.
+    Migrate {
+        /// Only list the pending migrations; change nothing.
+        #[arg(long)]
+        dry_run: bool,
+    },
     /// Run the server (foreground).
     Run {
         #[arg(long)]
@@ -268,7 +272,7 @@ async fn cli_main() -> anyhow::Result<()> {
             admin_user,
             admin_password,
         } => init(cli.data_dir, admin_user, admin_password).await,
-        Command::Migrate => migrate(cli.data_dir).await,
+        Command::Migrate { dry_run } => migrate(cli.data_dir, dry_run).await,
         Command::Run { host, port } => {
             let mut cfg = load_config(cli.data_dir)?;
             if let Some(h) = host {
@@ -444,12 +448,17 @@ async fn init(
 
     if user::count_users(&db).await? == 0 {
         let username = admin_user.unwrap_or_else(|| "admin".to_string());
+        let generated = admin_password.is_none();
         let password = admin_password.unwrap_or_else(|| {
             let pw = random_password();
             println!("generated admin password (store it now): {pw}");
             pw
         });
         let admin = user::create_user(&db, &username, &password, Role::Admin).await?;
+        if generated {
+            // A generated password is only a starting point: change it at the first sign-in.
+            tpt_home_core::settings::set_must_change_password(&db, admin.id, true).await?;
+        }
         println!("created admin user '{}' (id {})", admin.username, admin.id);
     } else {
         println!("users already exist; skipping admin bootstrap");
@@ -458,14 +467,21 @@ async fn init(
     Ok(())
 }
 
-async fn migrate(data_dir: Option<std::path::PathBuf>) -> anyhow::Result<()> {
+async fn migrate(data_dir: Option<std::path::PathBuf>, dry_run: bool) -> anyhow::Result<()> {
     let cfg = load_config(data_dir)?;
-    let db = tpt_home_api::init_server(cfg).await?;
-    let applied = tpt_home_core::migrate::run_all(&db).await?;
-    if applied.is_empty() {
+    let report = tpt_home_api::migrate_database(&cfg, dry_run).await?;
+    if report.pending.is_empty() {
         println!("database is up to date");
+    } else if dry_run {
+        println!("{} migration(s) would be applied:", report.pending.len());
+        for key in &report.pending {
+            println!("  {key}");
+        }
     } else {
-        for key in applied {
+        if let Some(copy) = &report.snapshot {
+            println!("copy saved before upgrading: {}", copy.display());
+        }
+        for key in &report.applied {
             println!("applied {key}");
         }
     }
@@ -558,6 +574,7 @@ async fn user_cmd(data_dir: Option<std::path::PathBuf>, cmd: UserCmd) -> anyhow:
             });
             let role = if admin { Role::Admin } else { Role::User };
             let u = user::create_user(&db, &username, &password, role).await?;
+            tpt_home_core::settings::set_must_change_password(&db, u.id, true).await?;
             println!("created {} '{}' (id {})", u.role(), u.username, u.id);
         }
         UserCmd::List => {
@@ -590,6 +607,8 @@ async fn user_cmd(data_dir: Option<std::path::PathBuf>, cmd: UserCmd) -> anyhow:
                 pw
             });
             user::set_password(&db, u.id, &password).await?;
+            // Set by an admin, so the user chooses their own at the next sign-in.
+            tpt_home_core::settings::set_must_change_password(&db, u.id, true).await?;
             println!("password reset for '{}'", u.username);
         }
     }
