@@ -135,3 +135,61 @@ pub async fn delete(
 pub async fn jobs() -> Json<Vec<registry::JobStatus>> {
     Json(registry::job_statuses())
 }
+
+/// When this process started, for the uptime figure in `/api/admin/health`.
+pub fn started_at() -> i64 {
+    static STARTED: std::sync::OnceLock<i64> = std::sync::OnceLock::new();
+    *STARTED.get_or_init(|| {
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_secs() as i64)
+            .unwrap_or(0)
+    })
+}
+
+#[derive(serde::Serialize)]
+pub struct Health {
+    pub version: &'static str,
+    pub started_at: i64,
+    pub uptime_secs: i64,
+    pub blueprints: usize,
+    pub db_bytes: u64,
+    pub backups: usize,
+    pub last_backup_at: Option<i64>,
+    pub backup_every_hours: u64,
+    pub backup_keep: usize,
+    pub jobs: usize,
+    /// Jobs whose last run did not end `ok`.
+    pub failing_jobs: usize,
+}
+
+/// GET /api/admin/health: version, uptime, database and backup status, and
+/// how many scheduled jobs are failing.
+pub async fn health(Extension(cfg): Extension<std::sync::Arc<Config>>) -> Json<Health> {
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs() as i64)
+        .unwrap_or(0);
+    let started = started_at();
+    let backups = crate::backup::list(&crate::backup::default_dir(&cfg));
+    let jobs = registry::job_statuses();
+    let failing = jobs
+        .iter()
+        .filter(|j| j.last_outcome.as_deref().is_some_and(|o| o != "ok"))
+        .count();
+    Json(Health {
+        version: tpt_home_core::VERSION,
+        started_at: started,
+        uptime_secs: now - started,
+        blueprints: registry::blueprints().count(),
+        db_bytes: std::fs::metadata(cfg.db_path())
+            .map(|m| m.len())
+            .unwrap_or(0),
+        backups: backups.len(),
+        last_backup_at: backups.first().map(|b| b.created_at),
+        backup_every_hours: cfg.backup_every_hours,
+        backup_keep: cfg.backup_keep,
+        jobs: jobs.len(),
+        failing_jobs: failing,
+    })
+}

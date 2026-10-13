@@ -184,6 +184,25 @@ tpt-home restore data/backups/<time>/tpt-<time>.db --yes
 Test a restore on a copy of the data before you need one. Keep backups on
 another disk or machine.
 
+**From the browser.** Admins can open **Admin · Status** to see the server's
+version, uptime, database size, the last backup and any failing jobs. The
+same page takes a backup now, lists backups with their restore paths, and
+downloads a backup's database. The download holds the database only, not the
+uploads. Uploading a database file adds it as a new backup, after checking that
+it is a tpt-home database. The browser cannot restore: that still needs the
+server stopped, so run `tpt-home restore` with the path the page shows.
+
+**Scheduled backups.** Set how often to back up and how many to keep in
+`config.toml` (or with environment variables):
+
+```toml
+backup_every_hours = 24   # 0 (default) turns scheduled backups off
+backup_keep = 7           # the oldest are deleted; the newest is always kept
+```
+
+The first scheduled backup runs one interval after the server starts. Keep a
+copy somewhere else as well: scheduled backups sit on the same disk.
+
 ### Sign-in protection
 
 - Each address may try to sign in 20 times a minute. Setup is limited the same way.

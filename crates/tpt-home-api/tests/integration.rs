@@ -710,7 +710,7 @@ async fn html_pages_allow_only_nonced_scripts() {
         .clone()
         .oneshot(
             Request::builder()
-                .uri("/dashboard")
+                .uri("/welcome")
                 .header("cookie", &cookie)
                 .body(Body::empty())
                 .unwrap(),

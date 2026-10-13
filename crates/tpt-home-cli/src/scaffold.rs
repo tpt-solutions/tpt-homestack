@@ -270,10 +270,9 @@ fn fill_placeholders(source: &str, name: &str, title: &str, pascal: &str) -> Str
         .replace("<PASCAL>", pascal)
 }
 
-/// `tpt-home new <name>`: create `blueprints/tpt-home-bp-<name>` and add it
-/// to the workspace members. Recompiling activates the blueprint.
-pub fn new_blueprint(name: &str, template: Template) -> anyhow::Result<()> {
-    validate_name(name)?;
+/// Display title and PascalCase type name for an id: `sensor_alerts` becomes
+/// `Sensor Alerts` and `SensorAlerts`.
+fn names(name: &str) -> (String, String) {
     let title = {
         let mut s = name.split('_').map(str::to_owned).collect::<Vec<_>>();
         for part in &mut s {
@@ -287,6 +286,14 @@ pub fn new_blueprint(name: &str, template: Template) -> anyhow::Result<()> {
         .chars()
         .filter(|c| c.is_ascii_alphanumeric())
         .collect();
+    (title, pascal)
+}
+
+/// `tpt-home new <name>`: create `blueprints/tpt-home-bp-<name>` and add it
+/// to the workspace members. Recompiling activates the blueprint.
+pub fn new_blueprint(name: &str, template: Template) -> anyhow::Result<()> {
+    validate_name(name)?;
+    let (title, pascal) = names(name);
 
     let root = find_workspace_root()?;
     let dir = root.join("blueprints").join(format!("tpt-home-bp-{name}"));
@@ -333,6 +340,85 @@ pub fn new_blueprint(name: &str, template: Template) -> anyhow::Result<()> {
     println!("  1. cargo build");
     println!("  2. Add your tables, routes and UI to the crate.");
     println!("  3. tpt-home run  — '{}' appears in the sidebar.", title);
+    Ok(())
+}
+
+/// Starter files for `tpt-home new --plugin <name>`, in `plugins/<name>/`.
+/// `Cargo.toml` is generated (see `plugin_cargo_toml`), the rest are below.
+const PLUGIN_FILES: &[TemplateFile] = &[
+    (
+        "plugin.toml",
+        include_str!("../templates/plugin/plugin.toml"),
+    ),
+    ("src/lib.rs", include_str!("../templates/plugin/src/lib.rs")),
+];
+
+fn plugin_cargo_toml(name: &str) -> String {
+    format!(
+        r#"[package]
+name = "tpt-home-plugin-{name}"
+description = "tpt-homestack plugin: {name}"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+publish = false
+
+[lib]
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+tpt-home-plugin-sdk = {{ path = "../../crates/tpt-home-plugin-sdk", version = "0.1.0" }}
+serde = {{ workspace = true }}
+serde_json = {{ workspace = true }}
+"#
+    )
+}
+
+/// `tpt-home new --plugin <name>`: create `plugins/<name>`, a WASM plugin
+/// built against the SDK, and add it to the workspace. Plugins are not linked
+/// into the binary: the server loads them from a `.tptp` package, so nothing
+/// in the CLI changes.
+pub fn new_plugin(name: &str) -> anyhow::Result<()> {
+    validate_name(name)?;
+    let (title, pascal) = names(name);
+
+    let root = find_workspace_root()?;
+    let dir = root.join("plugins").join(name);
+    if dir.exists() {
+        anyhow::bail!("{} already exists", dir.display());
+    }
+    std::fs::create_dir_all(dir.join("src"))?;
+    for (path, source) in PLUGIN_FILES {
+        std::fs::write(
+            dir.join(path),
+            fill_placeholders(source, name, &title, &pascal),
+        )?;
+    }
+    std::fs::write(dir.join("Cargo.toml"), plugin_cargo_toml(name))?;
+
+    let manifest_path = root.join("Cargo.toml");
+    let manifest = std::fs::read_to_string(&manifest_path).context("read root Cargo.toml")?;
+    std::fs::write(
+        &manifest_path,
+        add_member(&manifest, &format!("plugins/{name}"))?,
+    )?;
+
+    let crate_name = format!("tpt-home-plugin-{name}");
+    let wasm_name = crate_name.replace('-', "_");
+    println!("created {}", dir.display());
+    println!("registered in {}", manifest_path.display());
+    println!();
+    println!("Next steps:");
+    println!("  1. rustup target add wasm32-unknown-unknown");
+    println!("  2. cargo build -p {crate_name} --target wasm32-unknown-unknown --release");
+    println!(
+        "  3. copy target/wasm32-unknown-unknown/release/{wasm_name}.wasm to {}/plugin.wasm",
+        dir.display()
+    );
+    println!("  4. tpt-home plugin build {}", dir.display());
+    println!("  5. tpt-home plugin install <id>-<version>.tptp --approve db --enable");
     Ok(())
 }
 
@@ -449,5 +535,20 @@ mod tests {
         let single = "[workspace]\nmembers = [\"a\"]\n";
         let out2 = add_member(single, "b").unwrap();
         assert!(out2.contains("\"b\","));
+    }
+
+    #[test]
+    fn plugin_template_fills_placeholders_and_parses() {
+        for (path, source) in PLUGIN_FILES {
+            let text = fill_placeholders(source, "demo", "Demo", "Demo");
+            for placeholder in ["<NAME>", "<TITLE>", "<PASCAL>"] {
+                assert!(!text.contains(placeholder), "{path} left {placeholder}");
+            }
+        }
+        let manifest = fill_placeholders(PLUGIN_FILES[0].1, "demo", "Demo", "Demo");
+        let parsed = tpt_home_plugins::manifest::parse(&manifest).expect("manifest parses");
+        assert_eq!(parsed.plugin.id, "demo");
+        assert_eq!(parsed.plugin.entry, "plugin.wasm");
+        assert_eq!(parsed.tables[0].name, "items");
     }
 }

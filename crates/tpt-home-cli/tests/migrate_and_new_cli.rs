@@ -2,7 +2,8 @@
 // Copyright (c) 2026 TPT Solutions
 
 //! `migrate`, and the refusal paths of `new`, run as the real binary.
-//! `new` writes into the repository, so only its failure modes are tested here.
+//! `new` writes into the repository, so its blueprint success path is not run here.
+//! `new --plugin` is tested in a scratch workspace.
 
 use std::path::Path;
 use std::process::{Command, Output};
@@ -85,4 +86,89 @@ fn new_refuses_to_run_outside_the_workspace() {
         !cwd.path().join("blueprints").exists(),
         "nothing should be scaffolded outside a workspace"
     );
+}
+
+/// A directory that looks like the repo root to `new`: a workspace manifest
+/// with an empty members list.
+fn scratch_workspace() -> tempfile::TempDir {
+    let root = tempfile::tempdir().unwrap();
+    std::fs::write(
+        root.path().join("Cargo.toml"),
+        "[workspace]\nresolver = \"2\"\nmembers = [\n]\n",
+    )
+    .unwrap();
+    root
+}
+
+fn new_plugin(cwd: &Path, name: &str) -> Output {
+    Command::new(env!("CARGO_BIN_EXE_tpt-home"))
+        .current_dir(cwd)
+        .args(["new", "--plugin", name])
+        .output()
+        .expect("run tpt-home new --plugin")
+}
+
+#[test]
+fn new_plugin_scaffolds_a_registered_plugin_crate() {
+    let root = scratch_workspace();
+    let out = new_plugin(root.path(), "demo_plugin");
+    assert!(out.status.success(), "stderr: {}", stderr(&out));
+
+    let dir = root.path().join("plugins").join("demo_plugin");
+    let manifest = std::fs::read_to_string(dir.join("plugin.toml")).unwrap();
+    assert!(manifest.contains("id = \"demo_plugin\""), "{manifest}");
+    assert!(manifest.contains("name = \"Demo Plugin\""), "{manifest}");
+    let lib = std::fs::read_to_string(dir.join("src").join("lib.rs")).unwrap();
+    assert!(lib.contains("demo_plugin_items"), "{lib}");
+    assert!(lib.contains("export!(handle);"), "{lib}");
+    let cargo = std::fs::read_to_string(dir.join("Cargo.toml")).unwrap();
+    assert!(
+        cargo.contains("name = \"tpt-home-plugin-demo_plugin\""),
+        "{cargo}"
+    );
+    assert!(
+        cargo.contains("crate-type = [\"cdylib\", \"rlib\"]"),
+        "{cargo}"
+    );
+
+    let root_manifest = std::fs::read_to_string(root.path().join("Cargo.toml")).unwrap();
+    assert!(
+        root_manifest.contains("\"plugins/demo_plugin\","),
+        "{root_manifest}"
+    );
+    // Plugins are loaded from packages, so the CLI is not touched.
+    assert!(!root.path().join("crates").exists());
+}
+
+#[test]
+fn new_plugin_refuses_an_existing_directory() {
+    let root = scratch_workspace();
+    assert!(new_plugin(root.path(), "demo_plugin").status.success());
+    let again = new_plugin(root.path(), "demo_plugin");
+    assert!(!again.status.success());
+    assert!(
+        stderr(&again).contains("already exists"),
+        "{}",
+        stderr(&again)
+    );
+}
+
+#[test]
+fn new_plugin_rejects_a_blueprint_template_and_a_bad_id() {
+    let root = scratch_workspace();
+    let conflict = Command::new(env!("CARGO_BIN_EXE_tpt-home"))
+        .current_dir(root.path())
+        .args(["new", "--plugin", "demo", "--template", "records"])
+        .output()
+        .expect("run tpt-home new");
+    assert!(!conflict.status.success());
+    assert!(
+        stderr(&conflict).contains("cannot be used with"),
+        "{}",
+        stderr(&conflict)
+    );
+
+    let bad = new_plugin(root.path(), "Bad-Name");
+    assert!(!bad.status.success());
+    assert!(!root.path().join("plugins").exists());
 }

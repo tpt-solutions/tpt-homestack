@@ -21,6 +21,7 @@ pub mod migrate;
 pub mod migrations;
 pub mod prelude;
 pub mod registry;
+pub mod settings;
 pub mod webhook;
 
 // Convenience re-exports at the crate root.

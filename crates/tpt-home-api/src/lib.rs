@@ -10,15 +10,19 @@
 
 pub mod admin_routes;
 pub mod auth_routes;
+pub mod backup;
+pub mod backup_routes;
 pub mod pages;
+pub mod settings_routes;
 pub mod webhook_routes;
 
 use std::net::SocketAddr;
 use std::time::Duration;
 
+use axum::Extension;
 use axum::Router;
 use axum::extract::DefaultBodyLimit;
-use axum::routing::{delete, get, patch, post};
+use axum::routing::{delete, get, patch, post, put};
 use tower_http::cors::CorsLayer;
 
 use tpt_home_core::RateLimiter;
@@ -79,12 +83,21 @@ pub fn build_router(db: DbPool, cfg: &Config) -> Router {
             },
         )
     };
+    let upload_limit = (cfg.max_upload_mb as usize).saturating_mul(1024 * 1024);
+    let shared_cfg = std::sync::Arc::new(cfg.clone());
     let protected = Router::<DbPool>::new()
         .route("/", get(pages::root))
         .route("/dashboard", get(pages::dashboard_page))
         .route("/settings", get(pages::settings_page))
         .route("/admin/users", get(pages::users_page))
         .route("/admin/jobs", get(pages::jobs_page))
+        .route("/admin/status", get(pages::status_page))
+        .route("/welcome", get(pages::welcome_page))
+        .route("/api/settings/server", get(settings_routes::get))
+        .route(
+            "/api/admin/server",
+            put(settings_routes::update).layer(admin_role()),
+        )
         .route(
             "/api/admin/jobs",
             get(admin_routes::jobs).layer(admin_role()),
@@ -121,8 +134,29 @@ pub fn build_router(db: DbPool, cfg: &Config) -> Router {
             "/api/webhooks/{id}/deliveries",
             get(webhook_routes::deliveries).layer(admin_role()),
         )
+        .route(
+            "/api/admin/health",
+            get(admin_routes::health).layer(admin_role()),
+        )
+        .route(
+            "/api/admin/backups",
+            get(backup_routes::list)
+                .post(backup_routes::create)
+                .layer(admin_role()),
+        )
+        .route(
+            "/api/admin/backups/{name}/download",
+            get(backup_routes::download).layer(admin_role()),
+        )
+        .route(
+            "/api/admin/backups/upload",
+            post(backup_routes::upload)
+                .layer(DefaultBodyLimit::max(upload_limit))
+                .layer(admin_role()),
+        )
         .merge(registry::apply_routes(Router::new()))
         .merge(registry::apply_ui_routes(Router::new()))
+        .layer(Extension(shared_cfg))
         .layer(axum::middleware::from_fn_with_state(
             db.clone(),
             mw::auth_resolver,
@@ -213,6 +247,8 @@ pub async fn serve(cfg: Config) -> anyhow::Result<()> {
     let db = init_server(cfg.clone()).await?;
     registry::spawn_startup_tasks(db.clone());
     registry::spawn_jobs(db.clone());
+    admin_routes::started_at();
+    tokio::spawn(backup::schedule_loop(db.clone(), cfg.clone()));
     tokio::spawn(session_purge_loop(db.clone()));
 
     let app = build_router(db, &cfg);

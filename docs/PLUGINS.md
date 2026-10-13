@@ -4,6 +4,20 @@ Community blueprints are WebAssembly modules run in a `wasmi` sandbox. The
 host grants only the capabilities the admin approves at install time and
 renders any UI from the manifest, so plugins never ship HTML or JavaScript.
 
+## Starting a plugin
+
+From a checkout of the repo:
+
+```
+tpt-home new --plugin my_plugin
+```
+
+This creates `plugins/my_plugin/` with a manifest, a starter handler (a list
+with add and delete routes) and an SDK crate, and adds it to the workspace.
+The printed steps build it to `plugin.wasm`, pack it with `tpt-home plugin
+build`, and install it with `tpt-home plugin install --approve db --enable`.
+Plugins are not compiled into the server, so the server does not change.
+
 ## Anatomy of a plugin
 
 ```

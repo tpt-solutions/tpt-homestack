@@ -152,6 +152,10 @@ doesn't exist.
 - **TLS**: `docker-compose.yml` runs only the edge — Caddy (auto-HTTPS) and/or
   Cloudflared (Cloudflare Tunnel). The app itself always runs as the single
   binary on the host.
+- **Reaching it from outside the house**: [docs/REMOTE_ACCESS.md](docs/REMOTE_ACCESS.md)
+  covers Tailscale (private, for family) and Cloudflare Tunnel (a public
+  address), with `tpt-home remote status` and `tpt-home remote setup` to check
+  and set them up.
 
 ## Architecture in one glance
 

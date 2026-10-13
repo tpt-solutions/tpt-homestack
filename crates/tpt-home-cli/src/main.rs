@@ -6,6 +6,7 @@
 //! adds more `tpt-home-bp-*` dependencies and they self-register.
 
 mod backup;
+mod remote;
 mod scaffold;
 
 use clap::{CommandFactory, Parser, Subcommand};
@@ -65,13 +66,17 @@ enum Command {
         #[arg(long)]
         port: Option<u16>,
     },
-    /// Scaffold a new blueprint crate and register it in the workspace.
+    /// Scaffold a new blueprint crate (or, with --plugin, a WASM plugin) and
+    /// register it in the workspace.
     New {
-        /// Blueprint id (lowercase letters/digits/underscore).
+        /// Blueprint or plugin id (lowercase letters/digits/underscore).
         name: String,
         /// Starter code to generate.
-        #[arg(long, value_enum, default_value_t = scaffold::Template::Basic)]
+        #[arg(long, value_enum, default_value_t = scaffold::Template::Basic, conflicts_with = "plugin")]
         template: scaffold::Template,
+        /// Scaffold a WASM plugin in `plugins/<name>` instead of a compiled-in blueprint.
+        #[arg(long)]
+        plugin: bool,
     },
     /// Manage user accounts.
     User {
@@ -94,6 +99,11 @@ enum Command {
         /// Output directory (default `<data_dir>/backups`).
         #[arg(long)]
         out_dir: Option<std::path::PathBuf>,
+    },
+    /// Remote access: check clients and set up Tailscale or Cloudflare.
+    Remote {
+        #[command(subcommand)]
+        cmd: RemoteCmd,
     },
     /// Restore a database backup (server must be stopped).
     Restore {
@@ -135,6 +145,20 @@ enum TokenCmd {
     },
     /// Revoke a token by id (see `token list`).
     Revoke { id: i64 },
+}
+
+#[derive(Subcommand)]
+enum RemoteCmd {
+    /// Show which remote-access clients are installed and signed in.
+    Status,
+    /// Explain the steps for a provider and change config.toml after confirmation.
+    Setup {
+        #[arg(long, value_enum)]
+        provider: remote::Provider,
+        /// Skip the confirmation prompt.
+        #[arg(long)]
+        yes: bool,
+    },
 }
 
 #[derive(Subcommand)]
@@ -255,13 +279,30 @@ async fn cli_main() -> anyhow::Result<()> {
             }
             tpt_home_api::serve(cfg).await
         }
-        Command::New { name, template } => scaffold::new_blueprint(&name, template),
+        Command::New {
+            name,
+            template,
+            plugin,
+        } => {
+            if plugin {
+                scaffold::new_plugin(&name)
+            } else {
+                scaffold::new_blueprint(&name, template)
+            }
+        }
         Command::User { cmd } => user_cmd(cli.data_dir, cmd).await,
         Command::Token { cmd } => token_cmd(cli.data_dir, cmd).await,
         Command::Mcp { token } => mcp_cmd(cli.data_dir, token).await,
         Command::Backup { out_dir } => backup::backup(&load_config(cli.data_dir)?, out_dir).await,
         Command::Restore { backup, yes } => {
             backup::restore(&load_config(cli.data_dir)?, &backup, yes).await
+        }
+        Command::Remote { cmd } => {
+            let cfg = load_config(cli.data_dir)?;
+            match cmd {
+                RemoteCmd::Status => remote::status(&cfg),
+                RemoteCmd::Setup { provider, yes } => remote::setup(&cfg, provider, yes),
+            }
         }
         Command::Completions { shell } => {
             generate(

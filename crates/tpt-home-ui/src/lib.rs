@@ -141,6 +141,7 @@ fn sidebar(nav: &[(String, String)], active: &str, user: &UserView) -> String {
         for (path, label) in [
             ("/admin/users", "Admin · Users"),
             ("/admin/jobs", "Admin · Jobs"),
+            ("/admin/status", "Admin · Status"),
         ] {
             let class = if active == path {
                 " class=\"active\""
@@ -607,3 +608,102 @@ mod tests {
         assert!(p.contains("<p>hi</p>"));
     }
 }
+
+/// The first-run wizard at `/welcome`. `server_name` and the user list are
+/// escaped here. The body is a plain string (its braces are JavaScript), with
+/// `__NAME__` and `__USERS__` filled in.
+pub fn welcome_content(server_name: &str, users: &[UserRow]) -> String {
+    let list: String = users
+        .iter()
+        .map(|u| {
+            format!(
+                "<li>{} <span class=\"muted\">({})</span></li>",
+                esc(&u.username),
+                esc(&u.role)
+            )
+        })
+        .collect();
+    WELCOME_BODY
+        .replace("__NAME__", &esc(server_name))
+        .replace("__USERS__", &list)
+}
+
+const WELCOME_BODY: &str = r##"
+<p class="muted">Five minutes to set this up. Each step can be changed later from the Admin pages.</p>
+<div class="card">
+  <h2 style="margin-top:0">1. Name this server</h2>
+  <form onsubmit="return saveName(event)">
+    <div class="spread">
+      <input id="sn" value="__NAME__" maxlength="64" required aria-label="Server name">
+      <button type="submit">Save name</button>
+    </div>
+  </form>
+  <div id="sn-msg"></div>
+</div>
+<div class="card">
+  <h2 style="margin-top:0">2. Family accounts</h2>
+  <p class="muted">Each person gets their own account and signs in with it.</p>
+  <ul id="users">__USERS__</ul>
+  <form onsubmit="return addUser(event)">
+    <div class="spread">
+      <input id="nu" placeholder="username" required aria-label="Username">
+      <input id="np" type="password" placeholder="password (8+ characters)" minlength="8" required aria-label="Password">
+      <select id="nr" aria-label="Role"><option value="user">user</option><option value="admin">admin</option></select>
+      <button type="submit">Add account</button>
+    </div>
+  </form>
+  <div id="u-msg"></div>
+</div>
+<div class="card">
+  <h2 style="margin-top:0">3. Connect from anywhere (optional)</h2>
+  <p class="muted">Run <code>tpt-home remote status</code> on the server to see what is ready, then follow <code>docs/REMOTE_ACCESS.md</code> in the install folder. Nothing on this page changes remote access.</p>
+</div>
+<div class="card">
+  <h2 style="margin-top:0">4. Apps</h2>
+  <p class="muted">Apps will be added from an app catalog, which is not built yet. The apps on the Dashboard are the ones this server has now.</p>
+  <button type="button" data-click="finish">Finish setup</button>
+  <div id="f-msg"></div>
+</div>
+<script>
+async function call(url, method, body) {
+  const r = await fetch(url, {method, headers:{'Content-Type':'application/json'}, body: body ? JSON.stringify(body) : undefined});
+  const j = await r.json().catch(() => ({}));
+  if (!r.ok) throw new Error(j.error || r.statusText);
+  return j;
+}
+function note(id, text, ok) {
+  document.getElementById(id).innerHTML = '<div class="msg ' + (ok ? 'ok' : 'error') + '"></div>';
+  document.querySelector('#' + id + ' .msg').textContent = text;
+}
+async function saveName(ev) {
+  ev.preventDefault();
+  try {
+    const s = await call('/api/admin/server', 'PUT', {name: document.getElementById('sn').value});
+    note('sn-msg', 'Saved. This server is now called "' + s.name + '".', true);
+  } catch (e) { note('sn-msg', e.message, false); }
+  return false;
+}
+async function addUser(ev) {
+  ev.preventDefault();
+  try {
+    const u = await call('/api/admin/users', 'POST', {
+      username: document.getElementById('nu').value,
+      password: document.getElementById('np').value,
+      role: document.getElementById('nr').value
+    });
+    const li = document.createElement('li');
+    li.textContent = u.username + ' (' + u.role + ')';
+    document.getElementById('users').appendChild(li);
+    document.getElementById('nu').value = '';
+    document.getElementById('np').value = '';
+    note('u-msg', 'Account added.', true);
+  } catch (e) { note('u-msg', e.message, false); }
+  return false;
+}
+async function finish() {
+  try {
+    await call('/api/admin/server', 'PUT', {wizard_done: true});
+    location.href = '/dashboard';
+  } catch (e) { note('f-msg', e.message, false); }
+}
+</script>"##;

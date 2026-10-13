@@ -40,6 +40,10 @@ pub struct Config {
     /// proxy you control (Caddy, cloudflared) is the sole way to reach the
     /// server; otherwise clients can spoof the header.
     pub trust_proxy: bool,
+    /// Hours between scheduled backups. 0 (default) turns them off.
+    pub backup_every_hours: u64,
+    /// Scheduled backups kept; the oldest are deleted. At least 1.
+    pub backup_keep: usize,
 }
 
 impl Default for Config {
@@ -55,6 +59,8 @@ impl Default for Config {
             log_level: None,
             cors_origins: Vec::new(),
             trust_proxy: false,
+            backup_every_hours: 0,
+            backup_keep: 7,
         }
     }
 }
@@ -139,6 +145,12 @@ fn apply_env(cfg: &mut Config) {
     }
     if let Some(v) = read_env("MAX_UPLOAD_MB").and_then(|v| v.parse().ok()) {
         cfg.max_upload_mb = v;
+    }
+    if let Some(v) = read_env("BACKUP_EVERY_HOURS").and_then(|v| v.parse().ok()) {
+        cfg.backup_every_hours = v;
+    }
+    if let Some(v) = read_env("BACKUP_KEEP").and_then(|v| v.parse().ok()) {
+        cfg.backup_keep = v;
     }
     if let Some(v) = read_env("DB_PATH") {
         cfg.db_path = Some(PathBuf::from(v));

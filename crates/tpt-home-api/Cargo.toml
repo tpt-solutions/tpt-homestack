@@ -13,6 +13,7 @@ tpt-home-core = { workspace = true }
 tpt-home-ui = { workspace = true }
 axum = { workspace = true }
 tokio = { workspace = true }
+tokio-util = { workspace = true }
 tower-http = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }

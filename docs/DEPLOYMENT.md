@@ -67,6 +67,10 @@ Create the tunnel in the Cloudflare dashboard, point it at
 (a `.env` file next to `docker-compose.yml` works). Set `trust_proxy = true`
 here too.
 
+For a plain-language choice between Tailscale and Cloudflare, and the trade-offs,
+see [REMOTE_ACCESS.md](REMOTE_ACCESS.md). `tpt-home remote setup` makes the
+config changes after you confirm.
+
 ## 4. Backups & upgrades
 
 ```sh

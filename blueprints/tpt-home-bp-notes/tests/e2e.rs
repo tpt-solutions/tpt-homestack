@@ -219,6 +219,19 @@ async fn notes_ui_page_in_sidebar() {
     assert!(html.contains("Notes"));
     assert!(html.contains("/notes"));
 
+    // A new admin is sent to the first-run wizard, so finish it first.
+    let done = app
+        .clone()
+        .oneshot(json_req(
+            "PUT",
+            "/api/admin/server",
+            json!({"wizard_done": true}),
+            Some(&cookie),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(done.status(), StatusCode::OK);
+
     // Dashboard lists the blueprint.
     let res = app
         .oneshot(
