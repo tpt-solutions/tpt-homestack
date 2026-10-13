@@ -376,6 +376,7 @@ async fn init(
              # host = \"127.0.0.1\"\n\
              # port = 8080\n\
              # secure_cookies = false   # set true behind HTTPS\n\
+             # trust_proxy = false      # set true only behind Caddy/cloudflared\n\
              # session_ttl_hours = 72\n\
              # max_upload_mb = 512\n",
         )?;

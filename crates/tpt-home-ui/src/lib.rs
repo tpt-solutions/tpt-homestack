@@ -412,16 +412,43 @@ pub fn plugin_form_page(fields: &[String], action: &str) -> String {
 
 /// Plugin error page fragment.
 /// A `summary` page: one card per `(label, value)`, in a responsive grid.
-pub fn plugin_summary_page(metrics: &[(String, String)]) -> String {
+/// One card on a plugin summary page.
+pub enum MetricCard {
+    /// A single value, shown large.
+    Value { label: String, value: String },
+    /// One row per group (`group`, `value`), shown as a small table.
+    Rows {
+        label: String,
+        rows: Vec<(String, String)>,
+    },
+}
+
+pub fn plugin_summary_page(metrics: &[MetricCard]) -> String {
     let cards: String = metrics
         .iter()
-        .map(|(label, value)| {
-            format!(
+        .map(|metric| match metric {
+            MetricCard::Value { label, value } => format!(
                 "<div class=\"card\"><div class=\"muted\">{}</div>\
                  <div style=\"font-size:28px;font-weight:600;margin-top:4px\">{}</div></div>",
                 esc(label),
                 esc(value)
-            )
+            ),
+            MetricCard::Rows { label, rows } => {
+                let body: String = if rows.is_empty() {
+                    "<tr><td class=\"muted\" colspan=\"2\">Nothing yet.</td></tr>".to_string()
+                } else {
+                    rows.iter()
+                        .map(|(group, value)| {
+                            format!("<tr><td>{}</td><td>{}</td></tr>", esc(group), esc(value))
+                        })
+                        .collect()
+                };
+                format!(
+                    "<div class=\"card\" style=\"grid-column:1/-1\"><div class=\"muted\">{}</div>\
+                     <table style=\"margin-top:8px\"><tbody>{body}</tbody></table></div>",
+                    esc(label)
+                )
+            }
         })
         .collect();
     format!(

@@ -58,7 +58,7 @@ Key decisions
 - [x] Error handling with `?` in routes (`ApiError`: SQLx, I/O, JSON, auth conversions)
 - [x] Per-blueprint permission and role attributes (`role = "admin"`)
 - [x] Compile-time checks (route prefix `/api/` const-assert; id/path validation) — cross-crate id uniqueness is runtime-checked for now
-- [ ] `trybuild` compile-fail tests with readable error messages
+- [x] `trybuild` compile-fail tests with readable error messages — `crates/tpt-home-macros/tests/ui/` covers a route outside `/api/`, an unknown HTTP method, a bad `#[bp_job]` interval and a non-async job; the messages name each problem
 - [x] Proof-of-concept blueprint exercising routes, DB, and UI end to end (notes/track/drop e2e tests over the real router)
 - [x] Reconcile the spec example's `query_as!` usage with real SQLx syntax (runtime `query_as` + `FromRow`, documented in README)
 
@@ -162,13 +162,13 @@ Four tiers sharing one manifest + capability model: JS scripts (Boa), WASM (Rust
 - [x] Background cleanup task (cron-style) for expired files (`StartupEntry`)
 - [x] Upload size limits (`max_upload_mb`, enforced while streaming) — per-user quotas deferred
 - [ ] Leptos UI
-- [ ] Tests
+- [x] Tests: `tests/e2e.rs` (share links, passwords, multipart upload and download) and `tests/cleanup.rs` (the expiry sweep removes only expired rows and their files; a missing file does not block the row)
 ### `tpt-home-bp-track`
 - [x] Relational data model with dynamic user-defined tables/fields
 - [x] Safe dynamic SQL (integer-only identifiers `track_data_<id>`/`f_<id>`, parameterized values, kind validation)
 - [x] CRUD API and filters
 - [x] UI (table views, forms; server-rendered v1, Leptos hydration pending)
-- [ ] Tests
+- [x] Tests: `tests/e2e.rs` (dynamic tables, CRUD, filters, kind validation) and `tests/csv.rs` (export→import is byte-identical, case-insensitive headers, one bad row saves nothing, non-UTF-8 refused)
 
 ## Phase 6 — CLI & Developer Experience (`tpt-home-cli`)
 - [x] Clap-based `tpt-home` binary
@@ -183,7 +183,7 @@ Four tiers sharing one manifest + capability model: JS scripts (Boa), WASM (Rust
 - [x] Shell completions (bash, zsh, fish, powershell, elvish)
 - [x] `scripts/install.sh` systemd installer (user, hardened unit file, enable/start)
 - [x] Windows install script (`scripts/install.ps1`, logon Scheduled Task; script written, task registration not exercised here)
-- [ ] CLI integration tests — PARTIAL: `tests/plugin_cli.rs` and `tests/admin_cli.rs` run the real binary for `plugin`, `user`, `token`, `backup` and `restore` (13 tests); `migrate`, `run` and `new` are not covered yet
+- [ ] CLI integration tests — PARTIAL: `tests/plugin_cli.rs`, `tests/admin_cli.rs` and `tests/migrate_and_new_cli.rs` run the real binary for `plugin`, `user`, `token`, `backup`, `restore`, `migrate` (idempotent after init) and the refusal paths of `new` (bad id, outside a workspace). Not covered: `run` (starts the server), and `new` success (it writes into the repo)
 
 ## Phase 5b — Automation and Data I/O
 - [x] Scheduled-job hook: `#[bp_job(every = "5m")]` on `async fn(DbPool) -> Result<(), ApiError>`; `JobEntry` registry with one loop per job, each run in its own task so errors are logged and panics contained; first run one period after boot; interval checked at compile time (`s`/`m`/`h`/`d`, minimum 10s). Verified by loop tests (repeat, error, panic) and interval-parser tests, and live: a 10s job in a scratch blueprint wrote rows at 10, 20 and 30s
@@ -211,11 +211,12 @@ Checked `logbook`, `records` and `sensor-alerts` against the plugin runtimes (wa
 - [x] Current time and timezone for plugins: `tpt.now()` in the JS tier returns Unix seconds plus the server's local date, hour, minute and UTC offset; always allowed. NOT in the WASM tier: adding a host import changes the frozen ABI v1, so that is a separate decision
 - [x] Public (unauthenticated) plugin endpoints with host-verified HMAC signatures: `[[hooks]]` in the manifest, `POST /api/plugin-hooks/<id>/<name>` verified with `tpt_home_core::webhook::verify` (5-minute window, 64 KiB cap, same 401 for every refusal), handler called at `/hooks/<name>` with the verified body. Admin rotates the secret at `/api/plugins/<id>/hooks/<name>/secret`; uninstall deletes secrets. Verified through the real router in tests/plugin_hooks.rs. Gaps: the handler is tested directly, and the router only checks the anonymous refusal of the admin route, not an admin's success through the role guard; no replay store, same as core; secrets are stored in plain text because HMAC needs them
 - [x] Authenticated user identity passed to the plugin handler (`Request.user`: `id`, `username`, `role`) for HTTP and MCP calls, in the JS and WASM tiers (the request JSON gains an optional `user` key, so ABI v1 guests see no change). NOT forwarded to external plugins yet: the forward would need a trusted header; add it with the external tier's next change
-- [ ] Outbound HTTP capability (`http`, per-host allowlist approved by the admin) for fetch/uptime plugins
-- [ ] Notifications capability (push, email or webhook) so alerts and reminders can leave the server
-- [x] Declarative page kinds for summaries: `kind = "summary"` with up to 12 `metrics` (label + one scoped SELECT), shown as cards, checked at install (tests/summary_page.rs). PARTIAL: totals and averages only. Grouped metrics (one row per day or category, needed by `logbook` date grouping and the `dashboard` charts) are not built
+- [x] Outbound HTTP capability: `http` approval plus `http_hosts` declared in `[permissions]` (host or host:port, exact match after normalising). JS tier only: `tpt.http.get/post` return `{status, body}` or null, 1 MiB body cap, redirects not followed, request line and headers cannot be injected. HTTPS: `https` feature (ureq 3 with rustls and the OS trust store), on in the default CLI build. New crates: rustls 0.23 with the ring provider, rustls-platform-verifier (OS trust store) and webpki-roots (CDLA-Permissive-2.0, allowed); `cargo deny` licences, sources and bans pass. The default release CLI is 22.2 MiB against 20.5 MiB without it, so HTTPS costs about 1.7 MiB. Not tested: a real TLS handshake to a trusted server (the tests only check that TLS to a plain device fails cleanly). WASM tier not added (ABI frozen). Plain HTTP verified against a local TCP device in tests/script_http.rs; not run against a real LAN device
+- [x] Notifications capability: admin-configured channels (`/api/notify/channels`, URL kept as plain text and never listed, outcome recorded per channel), plugins name them in `notify_channels` and the admin approves `notify`; `tpt.notify(channel, text)` posts `{"text": ...}` as JSON over http or https. Verified by tests/notify.rs against a local device; not yet tested against a real chat service. Email and push are not built
+- [x] Declarative page kinds for summaries: `kind = "summary"` with up to 12 `metrics` (label + one scoped SELECT), shown as cards, checked at install (tests/summary_page.rs). Grouped metrics: `grouped = true` on a metric makes each SQL row a (group, value) line in a small table, capped at 50 rows (tests/logbook_plugin.rs). Still not built: charts (the `dashboard` template's)
 - [x] Port `records` as a plugin first: `plugins/records` (JS), same rules as the template, verified by `tests/records_plugin.rs` through install and dispatch. Deviation: delete is a form page that posts an id, since the plugin UI has no row actions yet
-- [ ] Port `logbook` (needs aggregate pages and time) and `sensor-alerts` (needs jobs, time, public signed endpoint, notifications)
+- [x] Port `sensor-alerts` as a plugin: `plugins/sensor-alerts` (JS) uses the signed feed hook, a one-minute check job, notifications, `tpt.now()` quiet hours, kv settings and summary and list pages. Verified by tests/sensor_alerts.rs: quiet-hours and silence alerts each sent exactly once, admin-only settings, bad events ignored. Differences from the template: events arrive on the hook instead of being polled, and the feed secret is created with the plugin's admin route, not the core webhook page. Not yet: the template's per-sensor event history page
+- [x] Port `logbook` as a plugin: `plugins/logbook` (JS) with the same validation as the template, a summary page with totals and grouped cards (total by month, entries by label), list, add and delete. Verified by tests/logbook_plugin.rs
 
 ## Phase 7 — Deployment & Platform Support
 - [x] `docker-compose.yml` (Caddy + Cloudflared only)
@@ -235,7 +236,7 @@ Checked `logbook`, `records` and `sensor-alerts` against the plugin runtimes (wa
 - [ ] Security review: auth, sessions, CSRF, XSS (markdown), path traversal, SQL injection, upload handling
 - [ ] Gate: this security review must pass before remote access (Tailscale or tunnel) is promoted to ordinary users in docs or the wizard
 - [ ] Plugin sandbox security review
-- [ ] Dependency audit (`cargo audit`, `cargo deny`)
+- [x] Dependency audit (`cargo audit`, `cargo deny`): `cargo deny check` passes (advisories, bans, licenses, sources). `cargo audit` reports `rsa` RUSTSEC-2023-0071, which is only in Cargo.lock via `sqlx-mysql` and not compiled into any target (no fix exists); ignored with that reason in `.cargo/audit.toml`. The `paste` warning is accepted in `deny.toml`. Re-check on each dependency change
 - [ ] Benchmark vs targets: idle RAM < 30 MB, startup < 0.5 s, binary < 25 MB, CPU idle ~0%
 - [ ] Optimize memory allocations (allocator choice, pool sizes) — check the license of any allocator
 - [ ] Verify the targets on ARM64 hardware
@@ -279,7 +280,7 @@ Phases 0-10 serve people comfortable with a shell and a compiler. This phase is 
 - [ ] `docs/REMOTE_ACCESS.md`: plain-language guide with Tailscale and Cloudflare first, then the advanced options and honest trade-offs (hosted coordination server, free-tier limits, CGNAT, domain cost); link from `docs/DEPLOYMENT.md` and `README.md`
 - [ ] `tpt-home remote status|setup` CLI backing the wizard (detects Tailscale, Netbird and cloudflared, prints guided steps, updates `config.toml` after `confirm()`); needs a small config-write helper; tested with fake `tailscale`/`cloudflared` scripts on PATH in `crates/tpt-home-cli/tests/remote_cli.rs`
 - [ ] Family access: family members use existing `Role::User` accounts; the wizard offers to create them and shows each one's sign-in how-to; optional later: a per-user remote-access flag (needs a migration)
-- [ ] `trust_proxy` config (default false): `client_key` only trusts `X-Forwarded-For` when set, so the rate limiter can't be evaded by a spoofed header — PARTIAL: code, unit test and docs written; NOT YET BUILT OR TESTED (`cargo test` not run). Still to do: an integration test in `crates/tpt-home-api/tests/integration.rs`, and set `TPT_HOME_TRUST_PROXY=true` for the Caddy/cloudflared setups (documented in `docs/DEPLOYMENT.md`; behind a proxy without it all visitors share one bucket)
+- [x] `trust_proxy` config (default false): `client_key` only trusts `X-Forwarded-For` when set, so the rate limiter can't be evaded by a spoofed header. Tested by unit tests and `forwarded_header_ignored_without_trust_proxy` / `forwarded_header_keys_the_limiter_with_trust_proxy` in `crates/tpt-home-api/tests/integration.rs`. Setup: `trust_proxy = true` in `config.toml` (or `TPT_HOME_TRUST_PROXY=true`) for the Caddy/cloudflared setups, as `docs/DEPLOYMENT.md` says. The compose file cannot set it because the binary runs on the host
 - [ ] Safe defaults when remote access is on: HTTPS or tailnet-only, rate limiting, forced admin password change if still default, and a visible "exposed to the internet" warning in the UI
 - [ ] In-app backup and restore (download/upload a backup file, scheduled automatic backups with retention)
 - [ ] In-app update: check for a new release, apply it, roll back on failure (builds on the upgrade/migration path in Phase 7)

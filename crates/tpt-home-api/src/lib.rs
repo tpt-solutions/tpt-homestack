@@ -129,7 +129,7 @@ pub fn build_router(db: DbPool, cfg: &Config) -> Router {
         ));
 
     // --- global stack -------------------------------------------------------
-    let limiter = RateLimiter::new(240, Duration::from_secs(60));
+    let limiter = RateLimiter::new(240, Duration::from_secs(60)).trust_proxy(cfg.trust_proxy);
     let mut app = Router::new()
         .merge(public)
         .merge(protected)

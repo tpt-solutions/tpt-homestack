@@ -36,6 +36,10 @@ pub struct Config {
     /// Browser origins allowed to call the API with credentials (CORS).
     /// Empty (default) = same-origin only, which the shell needs.
     pub cors_origins: Vec<String>,
+    /// Trust `X-Forwarded-For` for rate limiting. Enable only when a reverse
+    /// proxy you control (Caddy, cloudflared) is the sole way to reach the
+    /// server; otherwise clients can spoof the header.
+    pub trust_proxy: bool,
 }
 
 impl Default for Config {
@@ -50,6 +54,7 @@ impl Default for Config {
             db_path: None,
             log_level: None,
             cors_origins: Vec::new(),
+            trust_proxy: false,
         }
     }
 }
@@ -126,6 +131,9 @@ fn apply_env(cfg: &mut Config) {
     if let Some(v) = read_env("SECURE_COOKIES").and_then(|v| v.parse().ok()) {
         cfg.secure_cookies = v;
     }
+    if let Some(v) = read_env("TRUST_PROXY").and_then(|v| v.parse().ok()) {
+        cfg.trust_proxy = v;
+    }
     if let Some(v) = read_env("SESSION_TTL_HOURS").and_then(|v| v.parse().ok()) {
         cfg.session_ttl_hours = v;
     }
@@ -186,6 +194,7 @@ mod tests {
         assert_eq!(c.host, "127.0.0.1");
         assert_eq!(c.port, 8080);
         assert!(!c.secure_cookies);
+        assert!(!c.trust_proxy);
         assert_eq!(c.db_path(), PathBuf::from("data").join("tpt.db"));
         assert_eq!(c.uploads_dir(), PathBuf::from("data").join("uploads"));
     }

@@ -17,6 +17,7 @@ pub mod host_api;
 pub mod jobs;
 pub mod lifecycle;
 pub mod manifest;
+pub mod notify;
 pub mod package;
 pub mod registry;
 pub mod runtime;

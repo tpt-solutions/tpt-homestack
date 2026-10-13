@@ -1,0 +1,9 @@
+# cargo-audit configuration. Each ignore needs a reason.
+[advisories]
+ignore = [
+    # `rsa` is in Cargo.lock only through `sqlx-mysql`, which this project
+    # never enables, so it is not compiled into any target (`cargo tree`
+    # is empty). No fixed version exists. Remove this entry if MySQL support
+    # is ever enabled or the lockfile changes so the crate is compiled.
+    "RUSTSEC-2023-0071",
+]

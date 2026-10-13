@@ -52,7 +52,8 @@ TPT_DOMAIN=home.example.com docker compose up -d caddy
 
 Caddy obtains/renews certificates automatically and proxies to
 `host.docker.internal:8080` (Linux Docker resolves that via `extra_hosts:
-host-gateway`, already configured). Set `secure_cookies = true` in
+host-gateway`, already configured). Set `trust_proxy = true` (otherwise every
+visitor shares the proxy's rate-limit bucket) and `secure_cookies = true` in
 `data/config.toml` once HTTPS is live.
 
 ### Cloudflare Tunnel (no open ports)
@@ -63,7 +64,8 @@ TPT_CLOUDFLARE_TOKEN=<tunnel-token> docker compose up -d cloudflared
 
 Create the tunnel in the Cloudflare dashboard, point it at
 `http://host.docker.internal:8080`, and put the token in `TPT_CLOUDFLARE_TOKEN`
-(a `.env` file next to `docker-compose.yml` works).
+(a `.env` file next to `docker-compose.yml` works). Set `trust_proxy = true`
+here too.
 
 ## 4. Backups & upgrades
 
@@ -80,6 +82,9 @@ them without serving). Always take a `backup` before upgrading.
 
 - `secure_cookies = true` behind HTTPS.
 - Bind `host = 127.0.0.1` and let only the edge proxy in.
+- `trust_proxy = true` only when a proxy you control is the sole way in
+  (default `false`; otherwise `X-Forwarded-For` can be spoofed to dodge the
+  rate limit).
 - Keep `data/` on a filesystem with sane permissions (700, service user only).
 - Rate limiting is built in (auth endpoints: 5/min/IP, API: 240/min/IP).
 - Review `SECURITY.md` for the current trust model and known trade-offs

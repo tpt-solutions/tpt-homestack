@@ -37,6 +37,21 @@ inventory::submit! {
 
 inventory::submit! {
     tpt_home_core::MigrationEntry {
+        key: "tpt-home-plugins:004_notification_channels",
+        sql: r#"
+            CREATE TABLE IF NOT EXISTS notification_channels (
+                name         TEXT    PRIMARY KEY,
+                url          TEXT    NOT NULL,
+                created_at   INTEGER NOT NULL,
+                last_sent_at INTEGER,
+                last_error   TEXT
+            );
+        "#,
+    }
+}
+
+inventory::submit! {
+    tpt_home_core::MigrationEntry {
         key: "tpt-home-plugins:003_plugin_hooks",
         sql: r#"
             CREATE TABLE IF NOT EXISTS plugin_hooks (

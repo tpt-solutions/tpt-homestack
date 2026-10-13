@@ -1,0 +1,5 @@
+error: invalid interval '5x': unit must be s, m, h or d
+ --> tests/ui/job_bad_interval.rs:3:18
+  |
+3 | #[bp_job(every = "5x")]
+  |                  ^^^^

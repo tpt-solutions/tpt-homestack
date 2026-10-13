@@ -61,6 +61,20 @@ pub struct Permissions {
     pub kv: bool,
     /// File storage scoped to the plugin's data directory.
     pub storage: bool,
+    /// Outbound plain-HTTP requests, only to `http_hosts`. Approved by the
+    /// admin as `http`.
+    pub http: bool,
+    /// Declared `host` or `host:port` targets (port 80 when omitted). Requested
+    /// in the manifest; in effect only when `http` is approved.
+    #[serde(default)]
+    pub http_hosts: Vec<String>,
+    /// Send to admin-configured notification channels with `tpt.notify`.
+    /// Approved by the admin as `notify`.
+    pub notify: bool,
+    /// Channel names the plugin may send to. Requested in the manifest; in
+    /// effect only when `notify` is approved.
+    #[serde(default)]
+    pub notify_channels: Vec<String>,
 }
 
 impl Permissions {
@@ -73,6 +87,8 @@ impl Permissions {
                 "db" => granted.db = true,
                 "kv" => granted.kv = true,
                 "storage" => granted.storage = true,
+                "http" => granted.http = true,
+                "notify" => granted.notify = true,
                 other => return Err(format!("unknown permission '{other}'")),
             }
         }
@@ -92,6 +108,12 @@ impl Permissions {
         if self.storage {
             granted.push("storage");
         }
+        if self.http {
+            granted.push("http");
+        }
+        if self.notify {
+            granted.push("notify");
+        }
         serde_json::to_string(&granted).expect("permission list serialization")
     }
 
@@ -104,16 +126,35 @@ impl Permissions {
             db: has("db"),
             kv: has("kv"),
             storage: has("storage"),
+            http: has("http"),
+            http_hosts: Vec::new(),
+            notify: has("notify"),
+            notify_channels: Vec::new(),
         }
     }
 
     /// Capabilities that are both requested by the manifest and approved by
     /// the admin. The runtime uses this, never the manifest alone.
     pub fn intersect(&self, approved: &Self) -> Self {
+        let http = self.http && approved.http;
+        let notify = self.notify && approved.notify;
         Self {
             db: self.db && approved.db,
             kv: self.kv && approved.kv,
             storage: self.storage && approved.storage,
+            http,
+            // The approval names the capability; the hosts come from the manifest.
+            http_hosts: if http {
+                self.http_hosts.clone()
+            } else {
+                Vec::new()
+            },
+            notify,
+            notify_channels: if notify {
+                self.notify_channels.clone()
+            } else {
+                Vec::new()
+            },
         }
     }
 }
@@ -189,15 +230,21 @@ pub struct PageDef {
 }
 
 /// One card on a `summary` page (`metrics = [{ label, sql }]`). The SQL is a
-/// single scoped SELECT whose first column of the first row is shown.
+/// single scoped SELECT. Without `grouped`, the first column of the first row
+/// is shown. With `grouped = true`, each row is one line of a small table: the
+/// first column is the group, the second the value.
 #[derive(Debug, Clone, Deserialize, PartialEq)]
 pub struct MetricDef {
     pub label: String,
     pub sql: String,
+    #[serde(default)]
+    pub grouped: bool,
 }
 
 /// Most cards one summary page may show.
 pub const MAX_METRICS: usize = 12;
+/// Most rows a grouped card shows; extra rows are dropped.
+pub const MAX_GROUP_ROWS: usize = 50;
 
 /// A forward-only schema migration (`[[migrations]]`). Applied once per
 /// plugin, in version order, inside the install transaction.
@@ -437,6 +484,8 @@ fn validate(m: &PluginManifest) -> Result<(), anyhow::Error> {
     validate_migrations(m)?;
     validate_jobs(m)?;
     validate_hooks(m)?;
+    validate_http(m)?;
+    validate_notify(m)?;
     if m.limits.max_fuel < 1000 {
         anyhow::bail!("limits.max_fuel must be at least 1000");
     }
@@ -488,6 +537,67 @@ fn validate_hooks(m: &PluginManifest) -> Result<(), anyhow::Error> {
         if !names.insert(hook.name.as_str()) {
             anyhow::bail!("hook '{}' is declared twice", hook.name);
         }
+    }
+    Ok(())
+}
+
+/// Most hosts one plugin may declare.
+pub const MAX_HTTP_HOSTS: usize = 20;
+
+/// Parse a declared target: `host` or `host:port`. The host is lowercase
+/// letters, digits, `.` and `-`, so it is safe in a request line or a `Host`
+/// header. `None` when the text is not a valid target.
+pub fn parse_target(text: &str) -> Option<(String, Option<u16>)> {
+    let text = text.trim().to_ascii_lowercase();
+    let (host, port) = match text.rsplit_once(':') {
+        Some((host, port)) => (host, Some(port.parse::<u16>().ok().filter(|p| *p != 0)?)),
+        None => (text.as_str(), None),
+    };
+    let ok = !host.is_empty()
+        && host.len() <= 253
+        && !host.starts_with(['.', '-'])
+        && !host.ends_with(['.', '-'])
+        && host
+            .chars()
+            .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '.' || c == '-');
+    ok.then(|| (host.to_string(), port))
+}
+
+/// Outbound HTTP: hosts only make sense with the capability requested, and
+/// every declared target must normalize.
+fn validate_http(m: &PluginManifest) -> Result<(), anyhow::Error> {
+    let hosts = &m.permissions.http_hosts;
+    if hosts.is_empty() {
+        return Ok(());
+    }
+    if !m.permissions.http {
+        anyhow::bail!("http_hosts needs `http = true` in [permissions]");
+    }
+    if hosts.len() > MAX_HTTP_HOSTS {
+        anyhow::bail!("at most {MAX_HTTP_HOSTS} http_hosts per plugin");
+    }
+    for host in hosts {
+        if parse_target(host).is_none() {
+            anyhow::bail!("http host '{host}' must be host or host:port");
+        }
+    }
+    Ok(())
+}
+
+/// Notification channels: they need the capability, and names are plain.
+fn validate_notify(m: &PluginManifest) -> Result<(), anyhow::Error> {
+    let channels = &m.permissions.notify_channels;
+    if channels.is_empty() {
+        return Ok(());
+    }
+    if !m.permissions.notify {
+        anyhow::bail!("notify_channels needs `notify = true` in [permissions]");
+    }
+    if channels.len() > 10 {
+        anyhow::bail!("at most 10 notify_channels per plugin");
+    }
+    for channel in channels {
+        valid_component(channel, "notification channel")?;
     }
     Ok(())
 }
@@ -643,7 +753,8 @@ statements = []
             Permissions {
                 db: true,
                 kv: true,
-                storage: false
+                storage: false,
+                ..Default::default()
             }
         );
         assert!(
@@ -658,6 +769,7 @@ statements = []
             db: true,
             kv: true,
             storage: true,
+            ..Default::default()
         };
         assert_eq!(Permissions::from_json(&all.to_json()), all);
         assert_eq!(Permissions::from_json("not json"), Permissions::default());
@@ -673,11 +785,13 @@ statements = []
             db: true,
             kv: true,
             storage: false,
+            ..Default::default()
         };
         let approved = Permissions {
             db: true,
             kv: false,
             storage: true,
+            ..Default::default()
         };
         // db is requested and approved; kv is requested but not approved;
         // storage is approved but never requested.
@@ -687,7 +801,8 @@ statements = []
             Permissions {
                 db: true,
                 kv: false,
-                storage: false
+                storage: false,
+                ..Default::default()
             }
         );
     }

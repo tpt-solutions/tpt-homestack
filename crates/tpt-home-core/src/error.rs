@@ -63,7 +63,13 @@ impl IntoResponse for ApiError {
             tracing::error!(error = ?e, "internal error");
         }
         let status = self.status();
-        (status, axum::Json(json!({ "error": self.to_string() }))).into_response()
+        // Internal errors can carry SQL text, paths or other detail; the
+        // client gets a generic message and the log keeps the rest.
+        let message = match &self {
+            Self::Internal(_) => "internal server error".to_string(),
+            other => other.to_string(),
+        };
+        (status, axum::Json(json!({ "error": message }))).into_response()
     }
 }
 
@@ -100,6 +106,17 @@ mod tests {
         let err = sqlx::Error::ColumnNotFound("x".into());
         let api: ApiError = err.into();
         assert!(matches!(api, ApiError::Internal(_)));
+    }
+
+    #[tokio::test]
+    async fn internal_errors_do_not_reach_the_client() {
+        let err = ApiError::Internal(anyhow::anyhow!("no such table: secret_plugin_x"));
+        let res = err.into_response();
+        assert_eq!(res.status(), StatusCode::INTERNAL_SERVER_ERROR);
+        let bytes = axum::body::to_bytes(res.into_body(), 4096).await.unwrap();
+        let text = String::from_utf8_lossy(&bytes);
+        assert!(text.contains("internal server error"), "{text}");
+        assert!(!text.contains("secret_plugin_x"), "{text}");
     }
 
     #[test]

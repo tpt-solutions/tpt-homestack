@@ -74,6 +74,8 @@ The only host object is the frozen global `tpt`. The typings are in
 | `tpt.storage.read/write` | `storage` | file text or `null`; `true`/`false` |
 | `tpt.log(...)` | none | nothing (100 lines kept per call) |
 | `tpt.now()` | none | `{unix, local_date, local_hour, local_minute, utc_offset_minutes}` (server local zone) |
+| `tpt.notify(channel, text)` | `notify` + declared channel | `true` when the admin's channel answered 2xx, else `false`. Sends `{"text": ...}` as JSON, max 2000 characters |
+| `tpt.http.get/post(url, body?)` | `http` + declared host | `{status, body}`, or `null`. `http://` always; `https://` in builds with the `https` feature (the default CLI). A bare declared host admits only the scheme's default port (80 or 443) |
 
 Denied or failed calls never throw. Check for `null`/`false`.
 
@@ -138,6 +140,35 @@ text in `req.body`. Your handler returns `200` to accept, and the sender gets
 Every refusal is the same `401`: unknown plugin, disabled plugin, undeclared
 hook, no secret, or a bad signature. Replays inside the 5-minute window are
 not caught. Uninstalling the plugin deletes its secrets.
+
+## Notification channels
+
+An admin creates a named channel once, with the target URL (for example a
+chat webhook). The URL is kept as plain text and is never listed again.
+
+```sh
+curl -H "Authorization: Bearer $ADMIN_TOKEN" -H "Content-Type: application/json"      -d '{"name":"alerts","url":"https://chat.example/hook/XYZ"}'      http://127.0.0.1:8080/api/notify/channels
+```
+
+A plugin names the channels it may use, and the admin approves `notify`:
+
+```toml
+[permissions]
+notify = true
+notify_channels = ["alerts"]
+```
+
+Each send records its outcome on the channel (`last_sent_at`, `last_error`),
+which `GET /api/notify/channels` shows (admin only). Replacing a channel's URL
+clears that state. Deleting a channel is `DELETE /api/notify/channels/<name>`.
+
+## A complete example
+
+`plugins/sensor-alerts` uses every mechanism above: a signed `[[hooks]]`
+feed, a one-minute `[[jobs]]` check, `tpt.notify` to the `alerts` channel,
+`tpt.now()` for quiet hours, kv settings checked against `req.user.role`, and
+a summary and list page. Read it before writing a plugin that does several
+of these at once.
 
 ## Scheduled jobs
 

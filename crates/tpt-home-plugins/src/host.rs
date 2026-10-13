@@ -13,13 +13,30 @@
 //! - A call made after the per-call deadline is [`HostError::Deadline`]. The
 //!   guest is trapped and the whole invocation fails.
 
+use std::io::{Read, Write};
+use std::net::{TcpStream, ToSocketAddrs};
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
 use serde_json::{Map, Value};
 
-use crate::manifest::Permissions;
+use crate::manifest::{Permissions, parse_target};
 use crate::scope;
+use rusqlite::OptionalExtension as _;
+
+/// Largest response body an outbound request may return.
+pub const MAX_HTTP_BODY: usize = 1024 * 1024;
+/// Longest message `tpt.notify` sends.
+pub const MAX_NOTIFY_CHARS: usize = 2_000;
+/// Upper bound on connect and each read or write of one outbound request.
+const HTTP_IO_LIMIT: Duration = Duration::from_secs(10);
+
+/// A finished outbound request: the status code and the body text.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
+pub struct HttpReply {
+    pub status: u16,
+    pub body: String,
+}
 
 /// Maximum log lines captured per invocation.
 pub const MAX_LOG_LINES: usize = 100;
@@ -56,6 +73,44 @@ pub struct Now {
     pub local_hour: u32,
     pub local_minute: u32,
     pub utc_offset_minutes: i32,
+}
+
+/// A parsed outbound URL: the scheme, the host and port (defaults applied),
+/// and the path with its leading slash.
+struct Target {
+    secure: bool,
+    host: String,
+    port: u16,
+    path: String,
+}
+
+/// Parse an `http://` or `https://` URL. Control characters and spaces are
+/// refused, so a script cannot write its own request headers.
+fn parse_url(url: &str) -> HostResult<Target> {
+    if url.chars().any(|c| c.is_control() || c == ' ') {
+        return Err(failed("URL contains a control character or space"));
+    }
+    let (secure, rest) = if let Some(rest) = url.strip_prefix("https://") {
+        (true, rest)
+    } else if let Some(rest) = url.strip_prefix("http://") {
+        (false, rest)
+    } else {
+        return Err(failed("only http:// and https:// URLs are supported"));
+    };
+    let (authority, path) = match rest.find('/') {
+        Some(at) => (&rest[..at], &rest[at..]),
+        None => (rest, "/"),
+    };
+    let default_port = if secure { 443 } else { 80 };
+    let (host, port) = parse_target(authority)
+        .map(|(host, port)| (host, port.unwrap_or(default_port)))
+        .ok_or_else(|| failed("URL host is not valid"))?;
+    Ok(Target {
+        secure,
+        host,
+        port,
+        path: path.to_string(),
+    })
 }
 
 /// The services one plugin invocation may use. Created per call, so the
@@ -155,6 +210,212 @@ impl HostServices {
             self.logs.push(message);
         }
         Ok(())
+    }
+
+    /// `tpt.http`: one request to a declared host, over `http://` or, with the
+    /// `https` feature, `https://`. Redirects are not followed, so a 3xx comes
+    /// back as is.
+    pub fn http_request(
+        &mut self,
+        method: &str,
+        url: &str,
+        body: Option<&str>,
+    ) -> HostResult<HttpReply> {
+        self.check_deadline()?;
+        self.require(self.perms.http, "http")?;
+        if method != "GET" && method != "POST" {
+            return Err(failed(format!("method '{method}' is not allowed")));
+        }
+        let target = parse_url(url)?;
+        // A bare declared host admits the scheme's default port only; an
+        // explicit declared port must match exactly.
+        let default_port = if target.secure { 443 } else { 80 };
+        let declared = self.perms.http_hosts.iter().any(|entry| {
+            parse_target(entry)
+                .is_some_and(|(h, p)| h == target.host && p.unwrap_or(default_port) == target.port)
+        });
+        if !declared {
+            return Err(failed(format!(
+                "host '{}:{}' is not declared by the plugin",
+                target.host, target.port
+            )));
+        }
+        self.send(method, &target, body, "text/plain; charset=utf-8")
+    }
+
+    /// `tpt.notify`: POST `{"text": message}` to the admin's channel. The
+    /// channel URL is the approval itself, so it is not checked against
+    /// `http_hosts`. The outcome is recorded on the channel. `Ok(false)` when
+    /// the channel is unknown, the message is too long, or the target did not
+    /// answer 2xx.
+    pub fn notify(&mut self, channel: &str, message: &str) -> HostResult<bool> {
+        self.check_deadline()?;
+        self.require(self.perms.notify, "notify")?;
+        if !self.perms.notify_channels.iter().any(|c| c == channel) {
+            return Err(failed(format!(
+                "channel '{channel}' is not declared by the plugin"
+            )));
+        }
+        if message.chars().count() > MAX_NOTIFY_CHARS {
+            return Err(failed("message is too long"));
+        }
+        let url: Option<String> = self
+            .conn()?
+            .query_row(
+                "SELECT url FROM notification_channels WHERE name = ?1",
+                [channel],
+                |row| row.get(0),
+            )
+            .optional()
+            .map_err(failed)?;
+        let Some(url) = url else {
+            return Err(failed(format!("channel '{channel}' is not configured")));
+        };
+        let target = parse_url(&url)?;
+        let payload = serde_json::json!({ "text": message }).to_string();
+        let outcome = self.send("POST", &target, Some(&payload), "application/json");
+        let (sent, error) = match outcome {
+            Ok(reply) if (200..300).contains(&reply.status) => (true, None),
+            Ok(reply) => (false, Some(format!("status {}", reply.status))),
+            Err(HostError::Failed(reason)) => (false, Some(reason)),
+            Err(HostError::Deadline) => return Err(HostError::Deadline),
+        };
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_secs() as i64)
+            .unwrap_or(0);
+        self.conn()?
+            .execute(
+                "UPDATE notification_channels SET last_sent_at = ?2, last_error = ?3 WHERE name = ?1",
+                rusqlite::params![channel, now, error],
+            )
+            .map_err(failed)?;
+        Ok(sent)
+    }
+
+    /// Send one request, over plain TCP or TLS, and read the reply.
+    fn send(
+        &mut self,
+        method: &str,
+        target: &Target,
+        body: Option<&str>,
+        content_type: &str,
+    ) -> HostResult<HttpReply> {
+        self.check_deadline()?;
+        let timeout = self
+            .deadline
+            .saturating_duration_since(Instant::now())
+            .min(HTTP_IO_LIMIT);
+        if target.secure {
+            return self.send_https(method, target, body, content_type, timeout);
+        }
+        self.send_plain(method, target, body, content_type, timeout)
+    }
+
+    /// Plain `http://`: HTTP/1.0 over TCP, body read to EOF.
+    fn send_plain(
+        &mut self,
+        method: &str,
+        target: &Target,
+        body: Option<&str>,
+        content_type: &str,
+        timeout: Duration,
+    ) -> HostResult<HttpReply> {
+        let addr = format!("{}:{}", target.host, target.port)
+            .to_socket_addrs()
+            .map_err(failed)?
+            .next()
+            .ok_or_else(|| failed("host did not resolve"))?;
+        let mut stream = TcpStream::connect_timeout(&addr, timeout).map_err(failed)?;
+        stream.set_read_timeout(Some(timeout)).map_err(failed)?;
+        stream.set_write_timeout(Some(timeout)).map_err(failed)?;
+
+        let payload = body.unwrap_or("");
+        let request = format!(
+            "{method} {path} HTTP/1.0\r\nHost: {host}:{port}\r\nUser-Agent: tpt-homestack-plugin\r\n\
+             Connection: close\r\nContent-Type: {content_type}\r\nContent-Length: {len}\r\n\r\n{payload}",
+            path = target.path,
+            host = target.host,
+            port = target.port,
+            len = payload.len(),
+        );
+        stream.write_all(request.as_bytes()).map_err(failed)?;
+        let mut raw = Vec::new();
+        (&mut stream)
+            .take(MAX_HTTP_BODY as u64 + 16 * 1024)
+            .read_to_end(&mut raw)
+            .map_err(failed)?;
+        self.check_deadline()?;
+
+        let split = raw
+            .windows(4)
+            .position(|w| w == b"\r\n\r\n")
+            .ok_or_else(|| failed("response has no header end"))?;
+        let head = String::from_utf8_lossy(&raw[..split]);
+        let status = head
+            .lines()
+            .next()
+            .and_then(|line| line.split_whitespace().nth(1))
+            .and_then(|code| code.parse::<u16>().ok())
+            .ok_or_else(|| failed("response has no status code"))?;
+        let body = &raw[split + 4..];
+        if body.len() > MAX_HTTP_BODY {
+            return Err(failed("response body exceeds 1 MiB"));
+        }
+        Ok(HttpReply {
+            status,
+            body: String::from_utf8_lossy(body).into_owned(),
+        })
+    }
+
+    /// `https://` through ureq and rustls, with the OS trust store.
+    #[cfg(feature = "https")]
+    fn send_https(
+        &mut self,
+        method: &str,
+        target: &Target,
+        body: Option<&str>,
+        content_type: &str,
+        timeout: Duration,
+    ) -> HostResult<HttpReply> {
+        let url = format!("https://{}:{}{}", target.host, target.port, target.path);
+        let config = ureq::Agent::config_builder()
+            .timeout_global(Some(timeout))
+            .max_redirects(0)
+            .http_status_as_error(false)
+            .build();
+        let agent = ureq::Agent::new_with_config(config);
+        let reply = if method == "POST" {
+            agent
+                .post(&url)
+                .header("Content-Type", content_type)
+                .send(body.unwrap_or(""))
+        } else {
+            agent.get(&url).call()
+        };
+        let mut response = reply.map_err(failed)?;
+        let status = response.status().as_u16();
+        let text = response
+            .body_mut()
+            .with_config()
+            .limit(MAX_HTTP_BODY as u64)
+            .read_to_string()
+            .map_err(failed)?;
+        self.check_deadline()?;
+        Ok(HttpReply { status, body: text })
+    }
+
+    /// Without the `https` feature there is no TLS stack, so the call fails.
+    #[cfg(not(feature = "https"))]
+    fn send_https(
+        &mut self,
+        _method: &str,
+        _target: &Target,
+        _body: Option<&str>,
+        _content_type: &str,
+        _timeout: Duration,
+    ) -> HostResult<HttpReply> {
+        Err(failed("https needs a build with the https feature"))
     }
 
     /// Run one scoped SELECT and return rows as JSON objects.

@@ -189,7 +189,17 @@ pub async fn page(
         "summary" => {
             let mut cards = Vec::with_capacity(page_def.metrics.len());
             for metric in &page_def.metrics {
-                cards.push((metric.label.clone(), scalar(&db, &metric.sql).await?));
+                cards.push(if metric.grouped {
+                    ui::MetricCard::Rows {
+                        label: metric.label.clone(),
+                        rows: grouped_rows(&db, &metric.sql).await?,
+                    }
+                } else {
+                    ui::MetricCard::Value {
+                        label: metric.label.clone(),
+                        value: scalar(&db, &metric.sql).await?,
+                    }
+                });
             }
             ui::plugin_summary_page(&cards)
         }
@@ -227,21 +237,40 @@ fn page_columns(declared: &[String], first: Option<&serde_json::Value>) -> Vec<S
 }
 
 /// The first column of the first row of a metric query, as display text.
-/// No row or a NULL shows as an em dash; a float keeps two decimals.
+/// No row shows as an em dash.
 async fn scalar(db: &DbPool, sql: &str) -> Result<String, ApiError> {
     let Some(row) = sqlx::query(sql).fetch_optional(db).await? else {
-        return Ok("\u{2014}".to_string());
+        return Ok(EMPTY_CELL.to_string());
     };
-    if let Ok(v) = row.try_get::<Option<i64>, _>(0) {
-        return Ok(v.map_or("\u{2014}".to_string(), |v| v.to_string()));
+    Ok(cell_text(&row, 0))
+}
+
+/// Rows of a grouped metric as (group, value) text, capped at
+/// `MAX_GROUP_ROWS`. A row with no second column shows a dash as its value.
+async fn grouped_rows(db: &DbPool, sql: &str) -> Result<Vec<(String, String)>, ApiError> {
+    let rows = sqlx::query(sql).fetch_all(db).await?;
+    Ok(rows
+        .iter()
+        .take(crate::manifest::MAX_GROUP_ROWS)
+        .map(|row| (cell_text(row, 0), cell_text(row, 1)))
+        .collect())
+}
+
+const EMPTY_CELL: &str = "\u{2014}";
+
+/// One SQLite cell as display text: integer, then real (two decimals), then
+/// text. NULL, or a column that is missing, shows an em dash.
+fn cell_text(row: &sqlx::sqlite::SqliteRow, index: usize) -> String {
+    if let Ok(v) = row.try_get::<Option<i64>, _>(index) {
+        return v.map_or(EMPTY_CELL.to_string(), |v| v.to_string());
     }
-    if let Ok(v) = row.try_get::<Option<f64>, _>(0) {
-        return Ok(v.map_or("\u{2014}".to_string(), |v| format!("{v:.2}")));
+    if let Ok(v) = row.try_get::<Option<f64>, _>(index) {
+        return v.map_or(EMPTY_CELL.to_string(), |v| format!("{v:.2}"));
     }
-    if let Ok(v) = row.try_get::<Option<String>, _>(0) {
-        return Ok(v.unwrap_or_else(|| "\u{2014}".to_string()));
+    if let Ok(v) = row.try_get::<Option<String>, _>(index) {
+        return v.unwrap_or_else(|| EMPTY_CELL.to_string());
     }
-    Ok("\u{2014}".to_string())
+    EMPTY_CELL.to_string()
 }
 
 /// Read rows from a plugin's scoped table as JSON objects. `Some(id)` selects a
@@ -376,7 +405,9 @@ pub async fn install_plugin(
     };
     let installed = lifecycle::install_from_dir(&db, &staged, enable, &granted)
         .await
-        .map_err(|e| ApiError::internal(format!("install failed: {e}")))?;
+        // Almost every failure here is the package or manifest being refused,
+        // and the admin needs to read why, so it is a client error.
+        .map_err(|e| ApiError::bad_request(format!("install failed: {e}")))?;
     let effective = granted.intersect(&installed.permissions);
 
     Ok((

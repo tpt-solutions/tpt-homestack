@@ -1,0 +1,5 @@
+error: #[bp_job] functions must be `async`
+ --> tests/ui/job_not_async.rs:4:1
+  |
+4 | fn sweep() -> Result<(), tpt_home_core::ApiError> {
+  | ^^

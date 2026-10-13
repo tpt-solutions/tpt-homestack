@@ -580,3 +580,74 @@ async fn cookie_sessions_still_work_alongside_tokens() {
         .unwrap();
     assert_eq!(me.status(), StatusCode::OK);
 }
+
+/// Router with `trust_proxy` set, over a fresh database.
+async fn router_with_trust_proxy(trust: bool) -> axum::Router {
+    tpt_home_core::config::set_global_for_tests(test_config().clone());
+    let db: DbPool = connect_in_memory().await.unwrap();
+    tpt_home_core::migrate::run_all(&db).await.unwrap();
+    let cfg = Config {
+        trust_proxy: trust,
+        ..test_config().clone()
+    };
+    build_router(db, &cfg)
+}
+
+/// Sends `n` requests to the same route, each with a different forwarded
+/// client address, and returns the status of the last one.
+async fn send_with_forwarded_ips(app: &axum::Router, n: u32) -> StatusCode {
+    let mut last = StatusCode::OK;
+    for i in 0..n {
+        let res = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .uri("/api/auth/me")
+                    .header("x-forwarded-for", format!("198.51.100.{}", i % 250))
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        last = res.status();
+    }
+    last
+}
+
+#[tokio::test]
+async fn forwarded_header_ignored_without_trust_proxy() {
+    // Without a proxy, every request shares the peer's bucket, so spoofing a
+    // new X-Forwarded-For per request cannot get past the 240-per-minute limit.
+    let app = router_with_trust_proxy(false).await;
+    let status = send_with_forwarded_ips(&app, 241).await;
+    assert_eq!(status, StatusCode::TOO_MANY_REQUESTS);
+}
+
+#[tokio::test]
+async fn forwarded_header_keys_the_limiter_with_trust_proxy() {
+    // Behind a trusted proxy each forwarded client has its own bucket, so
+    // 241 requests from 250 distinct addresses are never limited.
+    let app = router_with_trust_proxy(true).await;
+    let status = send_with_forwarded_ips(&app, 241).await;
+    assert_ne!(status, StatusCode::TOO_MANY_REQUESTS);
+}
+
+#[tokio::test]
+async fn login_attempts_are_limited_per_client() {
+    // Guessing passwords is capped well below the general API limit.
+    let app = router_with_trust_proxy(false).await;
+    let attempt = || {
+        json_request(
+            "POST",
+            "/api/auth/login",
+            json!({"username": "nobody", "password": "wrong-guess"}),
+            None,
+        )
+    };
+    for _ in 0..tpt_home_core::middleware::LOGIN_MAX_DEFAULT {
+        let res = app.clone().oneshot(attempt()).await.unwrap();
+        assert_eq!(res.status(), StatusCode::UNAUTHORIZED);
+    }
+    let res = app.clone().oneshot(attempt()).await.unwrap();
+    assert_eq!(res.status(), StatusCode::TOO_MANY_REQUESTS);
+}

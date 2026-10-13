@@ -1,0 +1,75 @@
+# Sensor alerts: a door opened during quiet hours, and a sensor that has gone
+# silent, sent to the admin's "alerts" notification channel. JavaScript port
+# of the sensor-alerts starter template.
+#
+# Install with approve=db,kv,notify, create the "alerts" channel, then add the
+# feed secret: POST /api/plugins/sensor_alerts/hooks/feed/secret (admin).
+
+[plugin]
+id = "sensor_alerts"
+name = "Sensor alerts"
+version = "0.1.0"
+entry = "main.js"
+runtime = "js"
+
+[permissions]
+db = true
+kv = true
+notify = true
+notify_channels = ["alerts"]
+
+[limits]
+max_fuel = 50000000
+max_memory_mb = 16
+# Long enough for a few channel sends in one run, each bounded by the host.
+max_millis = 20000
+
+[[tables]]
+name = "events"
+columns = [
+    { name = "sensor", kind = "text" },
+    { name = "state", kind = "text" },
+    { name = "seen_at", kind = "integer" },
+]
+
+[[tables]]
+name = "alerts"
+columns = [
+    { name = "created_at", kind = "integer" },
+    { name = "sensor", kind = "text" },
+    { name = "kind", kind = "text" },
+    { name = "message", kind = "text" },
+    { name = "notified", kind = "integer" },
+]
+
+[[hooks]]
+name = "feed"
+
+[[jobs]]
+name = "check"
+every = "1m"
+path = "/check"
+
+[[pages]]
+path = "/status"
+title = "Sensor status"
+kind = "summary"
+metrics = [
+    { label = "Sensors", sql = "SELECT COUNT(DISTINCT sensor) FROM sensor_alerts_events" },
+    { label = "Alerts", sql = "SELECT COUNT(*) FROM sensor_alerts_alerts" },
+    { label = "Waiting to send", sql = "SELECT COUNT(*) FROM sensor_alerts_alerts WHERE notified = 0" },
+]
+
+[[pages]]
+path = "/alerts"
+title = "Alerts"
+kind = "list"
+table = "alerts"
+columns = ["message", "kind"]
+
+[[pages]]
+path = "/settings"
+title = "Alert settings"
+kind = "form"
+fields = ["quiet_from", "quiet_to", "silent_after_hours"]
+action = "/settings"
