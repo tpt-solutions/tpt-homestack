@@ -44,6 +44,29 @@ pub struct Config {
     pub backup_every_hours: u64,
     /// Scheduled backups kept; the oldest are deleted. At least 1.
     pub backup_keep: usize,
+    /// Announce the server on the local network over mDNS (default true). Only
+    /// happens when the server listens beyond loopback.
+    pub advertise: bool,
+    /// Name announced on the LAN as `<lan_name>.local` (default `homestack`).
+    /// One DNS label: letters, digits and hyphens, not starting or ending with
+    /// a hyphen, at most 63 characters.
+    pub lan_name: String,
+    /// Ed25519 public keys (64 hex characters each) whose signatures on plugin
+    /// packages are trusted. Empty (default) means no signed package installs.
+    pub trusted_plugin_keys: Vec<String>,
+    /// Refuse plugin packages that carry no signature (default false).
+    pub require_signed_plugins: bool,
+    /// Where the release manifest is published (see `update.rs`). Empty
+    /// (default) turns update checks off. Checks only read; nothing is installed.
+    pub update_url: String,
+    /// Refuse plain HTTP: GET and HEAD are redirected to HTTPS, other methods
+    /// get a 403. A request counts as HTTPS when it came through a trusted
+    /// proxy that sets `X-Forwarded-Proto: https` (needs `trust_proxy`).
+    /// Default false, so a home network without certificates keeps working.
+    pub require_https: bool,
+    /// Address of the plugin catalog index (format in `docs/PLUGIN_INDEX.md`).
+    /// Empty (default) turns the catalog off.
+    pub catalog_url: String,
 }
 
 impl Default for Config {
@@ -61,6 +84,13 @@ impl Default for Config {
             trust_proxy: false,
             backup_every_hours: 0,
             backup_keep: 7,
+            advertise: true,
+            lan_name: "homestack".to_string(),
+            trusted_plugin_keys: Vec::new(),
+            require_signed_plugins: false,
+            update_url: String::new(),
+            require_https: false,
+            catalog_url: String::new(),
         }
     }
 }
@@ -93,6 +123,12 @@ impl Config {
         }
 
         apply_env(&mut cfg);
+        if !valid_lan_name(&cfg.lan_name) {
+            anyhow::bail!(
+                "lan_name {:?} is not a valid name: use letters, digits and hyphens (1-63 characters, no leading or trailing hyphen)",
+                cfg.lan_name
+            );
+        }
         Ok(cfg)
     }
 
@@ -128,6 +164,14 @@ impl Config {
     }
 }
 
+/// True when `name` is a single DNS label that can be announced on the LAN.
+pub fn valid_lan_name(name: &str) -> bool {
+    (1..=63).contains(&name.len())
+        && !name.starts_with('-')
+        && !name.ends_with('-')
+        && name.chars().all(|c| c.is_ascii_alphanumeric() || c == '-')
+}
+
 fn read_env(key: &str) -> Option<String> {
     std::env::var(format!("TPT_HOME_{key}"))
         .ok()
@@ -155,6 +199,21 @@ fn apply_env(cfg: &mut Config) {
     }
     if let Some(v) = read_env("BACKUP_EVERY_HOURS").and_then(|v| v.parse().ok()) {
         cfg.backup_every_hours = v;
+    }
+    if let Some(v) = read_env("ADVERTISE").and_then(|v| v.parse().ok()) {
+        cfg.advertise = v;
+    }
+    if let Some(v) = read_env("LAN_NAME") {
+        cfg.lan_name = v;
+    }
+    if let Some(v) = read_env("UPDATE_URL") {
+        cfg.update_url = v;
+    }
+    if let Some(v) = read_env("CATALOG_URL") {
+        cfg.catalog_url = v;
+    }
+    if let Some(v) = read_env("REQUIRE_HTTPS").and_then(|v| v.parse().ok()) {
+        cfg.require_https = v;
     }
     if let Some(v) = read_env("BACKUP_KEEP").and_then(|v| v.parse().ok()) {
         cfg.backup_keep = v;
@@ -193,6 +252,11 @@ pub fn global() -> &'static Config {
         .expect("config not initialised; call config::init_global first")
 }
 
+/// The global config if it has been set, for callers that can run without it.
+pub fn try_global() -> Option<&'static Config> {
+    GLOBAL.get()
+}
+
 /// Helper for tests that need a global config without a server.
 pub fn set_global_for_tests(cfg: Config) {
     let _ = GLOBAL.set(cfg);
@@ -206,6 +270,21 @@ pub fn path_within(root: &Path, path: &Path) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn lan_names_are_single_dns_labels() {
+        assert!(valid_lan_name("homestack"));
+        assert!(valid_lan_name("home-stack-2"));
+        assert!(valid_lan_name(&"a".repeat(63)));
+        assert!(!valid_lan_name(""));
+        assert!(!valid_lan_name("-home"));
+        assert!(!valid_lan_name("home-"));
+        assert!(!valid_lan_name("home.stack"));
+        assert!(!valid_lan_name("home stack"));
+        assert!(!valid_lan_name(&"a".repeat(64)));
+        assert_eq!(Config::default().lan_name, "homestack");
+        assert!(Config::default().advertise);
+    }
 
     #[test]
     fn defaults_are_lean() {

@@ -71,7 +71,8 @@ login rate limit.
 
 ## Advanced options
 
-These need more know-how. Their steps are not automated.
+These need more know-how. Their steps are not automated. The step-by-step
+instructions are in [REMOTE_ADVANCED.md](REMOTE_ADVANCED.md).
 
 - **Caddy with your own domain.** Caddy gets HTTPS certificates for a domain
   you point at your home address. You must open ports 80 and 443 on your router

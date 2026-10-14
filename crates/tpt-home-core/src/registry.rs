@@ -429,3 +429,70 @@ mod job_tests {
         );
     }
 }
+
+/// A webhook delivery accepted by the server, handed to blueprint code by
+/// `#[bp_webhook("name")]`. `body` is the UTF-8 text the sender posted.
+#[derive(Clone, Debug)]
+pub struct WebhookDelivery {
+    pub id: i64,
+    pub webhook: String,
+    pub received_at: i64,
+    pub body: String,
+}
+
+/// The future a webhook handler returns. Boxed so handlers can be plain fn pointers.
+pub type WebhookFuture =
+    std::pin::Pin<Box<dyn std::future::Future<Output = Result<(), crate::ApiError>> + Send>>;
+
+/// A handler contributed by `#[bp_webhook("name")]`. The server calls it once
+/// for each accepted delivery to that webhook, after the sender has been answered.
+pub struct WebhookEntry {
+    pub blueprint: &'static str,
+    /// The webhook name it listens to, as created on the Webhooks page.
+    pub webhook: &'static str,
+    pub run: fn(DbPool, WebhookDelivery) -> WebhookFuture,
+}
+
+inv::collect!(WebhookEntry);
+
+/// Longest a webhook handler may run for one delivery.
+pub const WEBHOOK_HANDLER_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(60);
+
+/// Hand a delivery to every handler registered for its webhook. Each handler
+/// runs in its own task, so the caller does not wait, a failure is logged, a
+/// panic is contained, and a run over `WEBHOOK_HANDLER_TIMEOUT` is abandoned.
+pub fn dispatch_webhook(db: &DbPool, delivery: WebhookDelivery) {
+    for entry in inv::iter::<WebhookEntry>() {
+        if entry.webhook != delivery.webhook {
+            continue;
+        }
+        let db = db.clone();
+        let delivery = delivery.clone();
+        let blueprint = entry.blueprint;
+        tokio::spawn(async move {
+            let run = tokio::spawn((entry.run)(db, delivery.clone()));
+            match tokio::time::timeout(WEBHOOK_HANDLER_TIMEOUT, run).await {
+                Ok(Ok(Ok(()))) => {}
+                Ok(Ok(Err(e))) => tracing::warn!(
+                    blueprint,
+                    webhook = %delivery.webhook,
+                    delivery = delivery.id,
+                    error = %e,
+                    "webhook handler failed"
+                ),
+                Ok(Err(_)) => tracing::error!(
+                    blueprint,
+                    webhook = %delivery.webhook,
+                    delivery = delivery.id,
+                    "webhook handler panicked"
+                ),
+                Err(_) => tracing::warn!(
+                    blueprint,
+                    webhook = %delivery.webhook,
+                    delivery = delivery.id,
+                    "webhook handler timed out"
+                ),
+            }
+        });
+    }
+}

@@ -40,7 +40,7 @@ if (!browser) {
   process.exit(2);
 }
 
-const PAGES = ['/dashboard', '/welcome', '/settings', '/admin/users', '/admin/jobs', '/notes', '/track', '/drop'];
+const PAGES = ['/dashboard', '/welcome', '/settings', '/admin/users', '/admin/jobs', '/admin/status', '/admin/plugins', '/admin/remote', '/notes', '/track', '/drop'];
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
 async function waitFor(fn, what, timeoutMs = 15000) {

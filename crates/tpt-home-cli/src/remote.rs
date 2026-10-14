@@ -5,20 +5,16 @@
 //! It finds the official clients on this machine, prints the steps only a
 //! person can do (signing in, creating a tunnel), and changes `config.toml`
 //! only after confirmation. The server still binds to 127.0.0.1; the clients
-//! reach it through `tailscale serve` or `cloudflared`.
-//!
-//! Each client is found on PATH by default. `TPT_HOME_TAILSCALE_BIN`,
-//! `TPT_HOME_CLOUDFLARED_BIN` and `TPT_HOME_NETBIRD_BIN` replace the program,
-//! for clients installed outside PATH and for tests.
+//! reach it through `tailscale serve` or `cloudflared`. Detection lives in
+//! `tpt_home_core::remote`, shared with the admin Remote access page.
 
-use std::ffi::OsString;
 use std::path::Path;
-use std::process::{Command, Output};
 
 use anyhow::Context;
 use clap::ValueEnum;
 
 use tpt_home_core::config::Config;
+use tpt_home_core::remote::{self, describe_tailscale, spawn};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, ValueEnum)]
 pub enum Provider {
@@ -26,73 +22,6 @@ pub enum Provider {
     Tailscale,
     /// A public hostname behind a login, through a Cloudflare tunnel.
     Cloudflare,
-}
-
-fn program(name: &str, env: &str) -> OsString {
-    std::env::var_os(env).unwrap_or_else(|| OsString::from(name))
-}
-
-fn tailscale_bin() -> OsString {
-    program("tailscale", "TPT_HOME_TAILSCALE_BIN")
-}
-
-fn cloudflared_bin() -> OsString {
-    program("cloudflared", "TPT_HOME_CLOUDFLARED_BIN")
-}
-
-fn netbird_bin() -> OsString {
-    program("netbird", "TPT_HOME_NETBIRD_BIN")
-}
-
-/// Run a client. `None` means it is not installed (it could not be started).
-fn spawn(bin: &OsString, args: &[&str]) -> Option<Output> {
-    Command::new(bin).args(args).output().ok()
-}
-
-#[derive(Debug, Default, PartialEq, Eq)]
-pub struct TailscaleState {
-    pub installed: bool,
-    /// Signed in and connected (`BackendState` is `Running`).
-    pub running: bool,
-    /// MagicDNS name of this machine, without the trailing dot.
-    pub dns_name: Option<String>,
-    pub ips: Vec<String>,
-}
-
-/// Read the output of `tailscale status --json`.
-pub fn parse_tailscale_status(json: &str) -> Option<TailscaleState> {
-    let v: serde_json::Value = serde_json::from_str(json).ok()?;
-    let me = &v["Self"];
-    let dns_name = me["DNSName"]
-        .as_str()
-        .map(|s| s.trim_end_matches('.').to_string())
-        .filter(|s| !s.is_empty());
-    let ips = me["TailscaleIPs"]
-        .as_array()
-        .map(|a| {
-            a.iter()
-                .filter_map(|x| x.as_str().map(str::to_string))
-                .collect()
-        })
-        .unwrap_or_default();
-    Some(TailscaleState {
-        installed: true,
-        running: v["BackendState"].as_str() == Some("Running"),
-        dns_name,
-        ips,
-    })
-}
-
-fn tailscale_state(bin: &OsString) -> TailscaleState {
-    match spawn(bin, &["status", "--json"]) {
-        None => TailscaleState::default(),
-        Some(out) => {
-            let mut state =
-                parse_tailscale_status(&String::from_utf8_lossy(&out.stdout)).unwrap_or_default();
-            state.installed = true;
-            state
-        }
-    }
 }
 
 /// Set keys in `config.toml`, keeping every other key. Creates the file if it
@@ -130,28 +59,25 @@ pub fn status(cfg: &Config) -> anyhow::Result<()> {
         "config: host {}, port {}, secure_cookies {}, trust_proxy {}",
         cfg.host, cfg.port, cfg.secure_cookies, cfg.trust_proxy
     );
-
-    let ts = tailscale_state(&tailscale_bin());
-    println!("tailscale: {}", describe_tailscale(&ts));
-
-    let cf = spawn(&cloudflared_bin(), &["--version"]).is_some();
+    let found = remote::detect();
+    println!("tailscale: {}", describe_tailscale(&found.tailscale));
     println!(
         "cloudflared: {}",
-        if cf { "installed" } else { "not found" }
+        if found.cloudflared {
+            "installed"
+        } else {
+            "not found"
+        }
     );
-
-    let nb = spawn(&netbird_bin(), &["version"]).is_some();
-    println!("netbird: {}", if nb { "installed" } else { "not found" });
+    println!(
+        "netbird: {}",
+        if found.netbird {
+            "installed"
+        } else {
+            "not found"
+        }
+    );
     Ok(())
-}
-
-fn describe_tailscale(ts: &TailscaleState) -> String {
-    match (ts.installed, ts.running, &ts.dns_name) {
-        (false, _, _) => "not found".to_string(),
-        (true, false, _) => "installed, not signed in".to_string(),
-        (true, true, Some(name)) => format!("signed in as https://{name}"),
-        (true, true, None) => "signed in, no MagicDNS name".to_string(),
-    }
 }
 
 /// `tpt-home remote setup --provider <p>`: check the client, explain, and
@@ -165,8 +91,8 @@ pub fn setup(cfg: &Config, provider: Provider, yes: bool) -> anyhow::Result<()> 
 }
 
 fn setup_tailscale(cfg: &Config, config_path: &Path, yes: bool) -> anyhow::Result<()> {
-    let bin = tailscale_bin();
-    let ts = tailscale_state(&bin);
+    let bin = remote::tailscale_bin();
+    let ts = remote::tailscale_state(&bin);
     if !ts.installed {
         anyhow::bail!(
             "Tailscale is not installed. Install the official client from https://tailscale.com/download, sign in, then run this again."
@@ -216,7 +142,7 @@ fn setup_tailscale(cfg: &Config, config_path: &Path, yes: bool) -> anyhow::Resul
 }
 
 fn setup_cloudflare(cfg: &Config, config_path: &Path, yes: bool) -> anyhow::Result<()> {
-    let bin = cloudflared_bin();
+    let bin = remote::cloudflared_bin();
     if spawn(&bin, &["--version"]).is_none() {
         anyhow::bail!(
             "cloudflared is not installed. Install it from https://developers.cloudflare.com/cloudflare-one/connections/connect-networks/downloads/, then run this again."
@@ -260,24 +186,6 @@ mod tests {
     use super::*;
 
     #[test]
-    fn parses_a_signed_in_tailscale_status() {
-        let json = r#"{"BackendState":"Running","Self":{"DNSName":"laptop.tail1234.ts.net.","TailscaleIPs":["100.64.0.5","fd7a::5"]}}"#;
-        let st = parse_tailscale_status(json).unwrap();
-        assert!(st.installed && st.running);
-        assert_eq!(st.dns_name.as_deref(), Some("laptop.tail1234.ts.net"));
-        assert_eq!(st.ips, ["100.64.0.5", "fd7a::5"]);
-    }
-
-    #[test]
-    fn logged_out_tailscale_is_not_running() {
-        let json = r#"{"BackendState":"NeedsLogin","Self":{}}"#;
-        let st = parse_tailscale_status(json).unwrap();
-        assert!(st.installed && !st.running);
-        assert_eq!(st.dns_name, None);
-        assert!(parse_tailscale_status("not json").is_none());
-    }
-
-    #[test]
     fn set_config_keeps_other_keys_and_creates_the_file() {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("config.toml");
@@ -291,15 +199,5 @@ mod tests {
         let fresh = dir.path().join("new.toml");
         set_config(&fresh, &[("trust_proxy", toml::Value::Boolean(true))]).unwrap();
         assert!(fresh.is_file());
-    }
-
-    #[test]
-    fn describes_each_tailscale_state() {
-        assert_eq!(describe_tailscale(&TailscaleState::default()), "not found");
-        let off = TailscaleState {
-            installed: true,
-            ..Default::default()
-        };
-        assert_eq!(describe_tailscale(&off), "installed, not signed in");
     }
 }

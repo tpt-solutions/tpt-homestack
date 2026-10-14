@@ -185,7 +185,7 @@ pub async fn receive(
     let text =
         std::str::from_utf8(&body).map_err(|_| ApiError::bad_request("body must be UTF-8 text"))?;
     let now = unix_now();
-    sqlx::query(
+    let stored = sqlx::query(
         "INSERT INTO webhook_deliveries (webhook_id, received_at, body) VALUES (?1, ?2, ?3)",
     )
     .bind(webhook_id)
@@ -193,6 +193,7 @@ pub async fn receive(
     .bind(text)
     .execute(&db)
     .await?;
+    let delivery_id = stored.last_insert_rowid();
     sqlx::query("UPDATE webhooks SET last_received_at = ?2 WHERE id = ?1")
         .bind(webhook_id)
         .bind(now)
@@ -206,6 +207,18 @@ pub async fn receive(
     .bind(KEEP_DELIVERIES)
     .execute(&db)
     .await?;
+
+    // Blueprint handlers (`#[bp_webhook]`) run in their own tasks; the sender
+    // gets its 202 without waiting for them.
+    tpt_home_core::dispatch_webhook(
+        &db,
+        tpt_home_core::WebhookDelivery {
+            id: delivery_id,
+            webhook: name.clone(),
+            received_at: now,
+            body: text.to_string(),
+        },
+    );
 
     Ok((StatusCode::ACCEPTED, Json(json!({ "ok": true }))))
 }

@@ -217,6 +217,26 @@ enum PluginCmd {
         /// Enable after install. Without it, an upgrade keeps the current state.
         #[arg(long)]
         enable: bool,
+        /// Signature file (`<package>.sig`) from `plugin sign`. Checked against
+        /// `trusted_plugin_keys` in config.toml.
+        #[arg(long)]
+        signature: Option<std::path::PathBuf>,
+    },
+    /// Create a signing key for plugin packages. Writes the secret to `--out`
+    /// (refusing to overwrite) and the public key to `<out>.pub`.
+    Keygen {
+        /// Where to write the secret key.
+        #[arg(long)]
+        out: std::path::PathBuf,
+    },
+    /// Sign a `.tptp` package with a secret key from `plugin keygen`. Writes
+    /// `<package>.sig` next to it.
+    Sign {
+        /// The package to sign.
+        package: std::path::PathBuf,
+        /// Secret key file from `plugin keygen`.
+        #[arg(long)]
+        key: std::path::PathBuf,
     },
     /// Enable an installed plugin.
     Enable { id: String },
@@ -331,6 +351,8 @@ async fn cli_main() -> anyhow::Result<()> {
                 println!("wrote {} ({} bytes)", out.display(), package.bytes.len());
                 Ok(())
             }
+            PluginCmd::Keygen { out } => plugin_keygen(&out),
+            PluginCmd::Sign { package, key } => plugin_sign(&package, &key),
             cmd => plugin_admin(cli.data_dir, cmd).await,
         },
     }
@@ -340,11 +362,47 @@ async fn cli_main() -> anyhow::Result<()> {
 /// is the server's source of truth, but the server keeps plugins in memory and
 /// loads them at startup. A running server picks up the change on restart; use
 /// the admin API for an immediate change.
+/// `plugin keygen`: a new Ed25519 key. The secret is written with no
+/// overwrite, and on Unix only its owner can read it.
+fn plugin_keygen(out: &std::path::Path) -> anyhow::Result<()> {
+    use std::io::Write;
+    let (secret, public) = tpt_home_plugins::signing::generate_keypair();
+    let pub_path = std::path::PathBuf::from(format!("{}.pub", out.display()));
+    let mut options = std::fs::OpenOptions::new();
+    options.write(true).create_new(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        options.mode(0o600);
+    }
+    let mut file = options
+        .open(out)
+        .map_err(|e| anyhow::anyhow!("cannot create {}: {e}", out.display()))?;
+    writeln!(file, "{secret}")?;
+    std::fs::write(&pub_path, format!("{public}\n"))?;
+    println!("wrote secret key {} (keep it private)", out.display());
+    println!("wrote public key {}", pub_path.display());
+    println!("add this to trusted_plugin_keys in config.toml: {public}");
+    Ok(())
+}
+
+/// `plugin sign`: the signature of the package's exact bytes, as hex.
+fn plugin_sign(package: &std::path::Path, key: &std::path::Path) -> anyhow::Result<()> {
+    let secret = std::fs::read_to_string(key)
+        .map_err(|e| anyhow::anyhow!("cannot read {}: {e}", key.display()))?;
+    let archive = std::fs::read(package)?;
+    let signature = tpt_home_plugins::signing::sign(&archive, &secret)?;
+    let sig_path = std::path::PathBuf::from(format!("{}.sig", package.display()));
+    std::fs::write(&sig_path, format!("{signature}\n"))?;
+    println!("wrote {}", sig_path.display());
+    Ok(())
+}
+
 async fn plugin_admin(data_dir: Option<std::path::PathBuf>, cmd: PluginCmd) -> anyhow::Result<()> {
     use tpt_home_plugins::{lifecycle, manifest::Permissions};
 
     let cfg = load_config(data_dir)?;
-    let db = tpt_home_api::init_server(cfg).await?;
+    let db = tpt_home_api::init_server(cfg.clone()).await?;
     // Enable needs the plugin loaded in this process; the others do not.
     lifecycle::load_installed(&db).await?;
 
@@ -353,8 +411,15 @@ async fn plugin_admin(data_dir: Option<std::path::PathBuf>, cmd: PluginCmd) -> a
             path,
             approve,
             enable,
+            signature,
         } => {
             let archive = std::fs::read(&path)?;
+            let signature = match signature {
+                Some(sig_path) => Some(std::fs::read_to_string(&sig_path)?),
+                None => None,
+            };
+            let signed_by =
+                tpt_home_plugins::signing::check_install(&archive, signature.as_deref(), &cfg)?;
             let granted = Permissions::parse_list(&approve).map_err(anyhow::Error::msg)?;
             let (staged, manifest) = lifecycle::stage_package(&archive)?;
             // Same default as the admin API: an upgrade keeps its current state.
@@ -378,6 +443,10 @@ async fn plugin_admin(data_dir: Option<std::path::PathBuf>, cmd: PluginCmd) -> a
                 installed.plugin.version,
                 effective.to_json()
             );
+            match signed_by {
+                Some(key) => println!("signature verified (key {key})"),
+                None => println!("unsigned package"),
+            }
             Ok(())
         }
         PluginCmd::Enable { id } => {
@@ -419,7 +488,9 @@ async fn plugin_admin(data_dir: Option<std::path::PathBuf>, cmd: PluginCmd) -> a
             }
             Ok(())
         }
-        PluginCmd::Build { .. } => unreachable!("handled in main"),
+        PluginCmd::Build { .. } | PluginCmd::Keygen { .. } | PluginCmd::Sign { .. } => {
+            unreachable!("handled in main")
+        }
     }
 }
 

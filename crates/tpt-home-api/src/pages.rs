@@ -110,13 +110,28 @@ pub async fn settings_page(Extension(user): Extension<AuthUser>) -> Html<String>
         username: user.username.clone(),
         role: user.role.as_str().to_string(),
     };
-    Html(ui::page(
-        "Settings",
-        &nav,
-        "/settings",
-        &view,
-        &ui::settings_content(),
-    ))
+    let content = format!("{}\n{}", ui::settings_content(), phone_card());
+    Html(ui::page("Settings", &nav, "/settings", &view, &content))
+}
+
+/// The "open on a phone" card: the LAN address and its QR code when the server
+/// is reachable and announced, otherwise why it is not.
+fn phone_card() -> String {
+    let Some(cfg) = tpt_home_core::config::try_global() else {
+        return ui::phone_link_unavailable_card();
+    };
+    if crate::lan::is_loopback_host(&cfg.host) {
+        return ui::phone_link_unavailable_card();
+    }
+    if !cfg.advertise {
+        return format!(
+            "<div class=\"card\">\n<h2 style=\"margin-top:0\">Open on a phone or tablet</h2>\n\
+             <p>Name announcing is off (<code>advertise = false</code>). Use this computer's IP address with port <code>{}</code>.</p>\n</div>",
+            cfg.port
+        );
+    }
+    let url = crate::lan::lan_url(cfg);
+    ui::phone_link_card(&url, ui::qr_svg(&url).as_deref())
 }
 
 /// GET /admin/users — admin only (manual check; pages do not go through the
@@ -149,6 +164,42 @@ pub async fn users_page(
         "/admin/users",
         &view,
         &ui::users_admin_content(&rows),
+    )))
+}
+
+/// GET /admin/plugins: install, enable, disable and remove plugins (admins only).
+pub async fn plugins_page(Extension(user): Extension<AuthUser>) -> Result<Html<String>, Redirect> {
+    if !user.is_admin() {
+        return Err(Redirect::to("/dashboard"));
+    }
+    let view = ui::UserView {
+        username: user.username.clone(),
+        role: user.role.as_str().to_string(),
+    };
+    Ok(Html(ui::page(
+        "Admin · Plugins",
+        &registry::nav_entries(),
+        "/admin/plugins",
+        &view,
+        &ui::plugins_admin_content(),
+    )))
+}
+
+/// GET /admin/remote: live checks for remote access and the steps left (admins only).
+pub async fn remote_page(Extension(user): Extension<AuthUser>) -> Result<Html<String>, Redirect> {
+    if !user.is_admin() {
+        return Err(Redirect::to("/dashboard"));
+    }
+    let view = ui::UserView {
+        username: user.username.clone(),
+        role: user.role.as_str().to_string(),
+    };
+    Ok(Html(ui::page(
+        "Admin · Remote access",
+        &registry::nav_entries(),
+        "/admin/remote",
+        &view,
+        &ui::remote_admin_content(),
     )))
 }
 
@@ -239,6 +290,13 @@ const STATUS_BODY: &str = r##"
 </div>
 <div class="card">
   <div class="spread">
+    <h3 style="margin:0">Updates</h3>
+    <button class="secondary" data-click="checkUpdate">Check for updates</button>
+  </div>
+  <div id="update"><p class="muted">Not checked yet. Checks read the release address set as <code>update_url</code>; nothing is installed.</p></div>
+</div>
+<div class="card">
+  <div class="spread">
     <h3 style="margin:0">Backups</h3>
     <button id="make" type="button">Back up now</button>
   </div>
@@ -275,11 +333,32 @@ async function loadHealth() {
       cell('Uptime', Math.floor(h.uptime_secs / 3600) + ' h ' + Math.floor(h.uptime_secs % 3600 / 60) + ' min') +
       cell('Blueprints', h.blueprints) +
       cell('Database', size(h.db_bytes)) +
+      cell('Disk free', h.disk_free_bytes == null ? 'unknown' : size(h.disk_free_bytes) + (h.disk_total_bytes ? ' of ' + size(h.disk_total_bytes) : '')) +
       cell('Jobs', failing) +
       cell('Last backup', esc(when(h.last_backup_at))) +
       cell('Scheduled backups', h.backup_every_hours > 0 ? 'every ' + h.backup_every_hours + ' h, keep ' + h.backup_keep : 'off') +
       '</div>';
   } catch (e) { show(e.message, false); }
+}
+async function checkUpdate() {
+  const box = document.getElementById('update');
+  box.innerHTML = '<p class="muted">Checking…</p>';
+  try {
+    const u = await api('/api/admin/update');
+    if (!u.configured) {
+      box.innerHTML = '<p>Version ' + esc(u.current) + '. Update checks are off: set <code>update_url</code> in config.toml to turn them on.</p>';
+    } else if (u.error) {
+      box.innerHTML = '<p>Version ' + esc(u.current) + '. The check failed: ' + esc(u.error) + '</p>';
+    } else if (u.update_available) {
+      box.innerHTML = '<p><span class="badge warn">Update available</span> ' + esc(u.current) + ' → ' + esc(u.latest) +
+        '</p><p>Download: <a href="' + esc(u.download_url) + '" rel="noopener">' + esc(u.download_url) + '</a><br>SHA-256: <code>' + esc(u.sha256) + '</code></p>' +
+        (u.notes ? '<p class="muted">' + esc(u.notes) + '</p>' : '') +
+        '<p class="muted">Install it yourself after checking the checksum, then restart the server.</p>';
+    } else {
+      box.innerHTML = '<p>Version ' + esc(u.current) + ' is the latest published release.</p>';
+    }
+  } catch (e) { box.textContent = e.message; }
+  return false;
 }
 async function loadBackups() {
   try {

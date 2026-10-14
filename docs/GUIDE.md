@@ -116,6 +116,13 @@ variables, then from command-line flags. The most useful keys:
 | `secure_cookies` | `false` | Send session cookies only over HTTPS. Turn on behind HTTPS. |
 | `max_upload_mb` | `100` | Largest Drop upload. |
 | `trust_proxy` | `false` | Use the `X-Forwarded-For` address for rate limits. Set only behind a proxy you control. |
+| `require_https` | `false` | Redirect plain-HTTP page requests to HTTPS and refuse other plain-HTTP requests. A proxy's `X-Forwarded-Proto: https` counts only with `trust_proxy`. Webhook senders must then use HTTPS too. |
+| `advertise` | `true` | Announce `<lan_name>.local` over mDNS when the server listens beyond this computer. |
+| `lan_name` | `homestack` | The name announced on the network (letters, digits, hyphens). |
+| `update_url` | empty | Where the release manifest is published. Empty turns update checks off. Checks only read; nothing is installed. |
+| `catalog_url` | empty | Address of the plugin catalog index (`docs/PLUGIN_INDEX.md`). Empty turns the catalog off. |
+| `trusted_plugin_keys` | `[]` | Public keys (hex) whose signatures on plugin packages are trusted. |
+| `require_signed_plugins` | `false` | Refuse plugin packages that carry no signature. |
 | `log_level` | `info` | Logging detail. |
 
 `tpt-home run --host ... --port ...` overrides both for one run.

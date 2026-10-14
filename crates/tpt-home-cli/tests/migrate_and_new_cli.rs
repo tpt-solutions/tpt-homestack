@@ -212,3 +212,80 @@ fn migrate_reports_what_it_applied_and_keeps_a_copy_first() {
     );
     assert!(data.join("backups").join("upgrade").is_dir());
 }
+
+/// A scratch repo laid out like the real one where `new` edits it: the root
+/// workspace, the CLI's manifest with one blueprint dependency, and its
+/// `main.rs` with one link anchor.
+fn scratch_repo_with_cli() -> tempfile::TempDir {
+    let root = scratch_workspace();
+    let cli = root.path().join("crates").join("tpt-home-cli");
+    std::fs::create_dir_all(cli.join("src")).unwrap();
+    std::fs::write(
+        cli.join("Cargo.toml"),
+        "[package]\nname = \"tpt-home-cli\"\n\n[dependencies]\n\
+         tpt-home-bp-track = { path = \"../../blueprints/tpt-home-bp-track\", version = \"0.1.0\" }\n\
+         tpt-home-plugins = { path = \"../tpt-home-plugins\", version = \"0.1.0\" }\n",
+    )
+    .unwrap();
+    std::fs::write(
+        cli.join("src").join("main.rs"),
+        "static BLUEPRINT_LINK_ANCHORS: &[fn() -> &'static str] = &[\n    \
+         tpt_home_bp_track::__link_anchor,\n    \
+         tpt_home_plugins::__link_anchor,\n];\n",
+    )
+    .unwrap();
+    root
+}
+
+#[test]
+fn new_blueprint_scaffolds_registers_and_links_the_crate() {
+    let root = scratch_repo_with_cli();
+    let out = Command::new(env!("CARGO_BIN_EXE_tpt-home"))
+        .current_dir(root.path())
+        .args(["new", "demo_notes", "--template", "basic"])
+        .output()
+        .expect("run tpt-home new");
+    assert!(out.status.success(), "stderr: {}", stderr(&out));
+
+    let dir = root
+        .path()
+        .join("blueprints")
+        .join("tpt-home-bp-demo_notes");
+    let lib = std::fs::read_to_string(dir.join("src").join("lib.rs")).unwrap();
+    assert!(lib.contains("demo_notes"), "name filled in: {lib}");
+    assert!(!lib.contains("<NAME>") && !lib.contains("<TITLE>"), "{lib}");
+    assert!(dir.join("Cargo.toml").exists());
+
+    let root_manifest = std::fs::read_to_string(root.path().join("Cargo.toml")).unwrap();
+    assert!(
+        root_manifest.contains("\"blueprints/tpt-home-bp-demo_notes\","),
+        "{root_manifest}"
+    );
+    let cli_manifest =
+        std::fs::read_to_string(root.path().join("crates/tpt-home-cli/Cargo.toml")).unwrap();
+    assert!(
+        cli_manifest.contains(
+            "tpt-home-bp-demo_notes = { path = \"../../blueprints/tpt-home-bp-demo_notes\""
+        ),
+        "{cli_manifest}"
+    );
+    let main =
+        std::fs::read_to_string(root.path().join("crates/tpt-home-cli/src/main.rs")).unwrap();
+    assert!(
+        main.contains("tpt_home_bp_demo_notes::__link_anchor,"),
+        "{main}"
+    );
+
+    // A second run refuses rather than overwriting the crate.
+    let again = Command::new(env!("CARGO_BIN_EXE_tpt-home"))
+        .current_dir(root.path())
+        .args(["new", "demo_notes"])
+        .output()
+        .unwrap();
+    assert!(!again.status.success());
+    assert!(
+        stderr(&again).contains("already exists"),
+        "{}",
+        stderr(&again)
+    );
+}

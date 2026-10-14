@@ -12,9 +12,12 @@ pub mod admin_routes;
 pub mod auth_routes;
 pub mod backup;
 pub mod backup_routes;
+pub mod lan;
 pub mod pages;
+pub mod remote_routes;
 pub mod safety;
 pub mod settings_routes;
+pub mod update_routes;
 pub mod webhook_routes;
 
 use std::net::SocketAddr;
@@ -143,6 +146,8 @@ pub fn build_router(db: DbPool, cfg: &Config) -> Router {
         .route("/settings", get(pages::settings_page))
         .route("/admin/users", get(pages::users_page))
         .route("/admin/jobs", get(pages::jobs_page))
+        .route("/admin/plugins", get(pages::plugins_page))
+        .route("/admin/remote", get(pages::remote_page))
         .route("/admin/status", get(pages::status_page))
         .route("/welcome", get(pages::welcome_page))
         .route("/api/settings/server", get(settings_routes::get))
@@ -191,6 +196,14 @@ pub fn build_router(db: DbPool, cfg: &Config) -> Router {
             get(admin_routes::health).layer(admin_role()),
         )
         .route(
+            "/api/admin/remote",
+            get(remote_routes::status).layer(admin_role()),
+        )
+        .route(
+            "/api/admin/update",
+            get(update_routes::status).layer(admin_role()),
+        )
+        .route(
             "/api/admin/backups",
             get(backup_routes::list)
                 .post(backup_routes::create)
@@ -232,7 +245,15 @@ pub fn build_router(db: DbPool, cfg: &Config) -> Router {
             limiter,
             mw::rate_limit_fn,
         ))
-        .layer(DefaultBodyLimit::max(DEFAULT_BODY_LIMIT));
+        .layer(DefaultBodyLimit::max(DEFAULT_BODY_LIMIT))
+        // Outermost, so plain-HTTP requests are answered before anything else runs.
+        .layer(axum::middleware::from_fn_with_state(
+            mw::HttpsPolicy {
+                required: cfg.require_https,
+                trust_proxy: cfg.trust_proxy,
+            },
+            mw::https_required,
+        ));
 
     if !cfg.cors_origins.is_empty() {
         let origins: Vec<_> = cfg
@@ -313,6 +334,19 @@ pub async fn serve(cfg: Config) -> anyhow::Result<()> {
     let app = build_router(db, &cfg);
     let addr = format!("{}:{}", cfg.host, cfg.port);
     let listener = tokio::net::TcpListener::bind(&addr).await?;
+    // Held until the server stops; dropping it withdraws the LAN name.
+    let _lan_name = match lan::announce(&cfg) {
+        Ok(announcement) => {
+            if announcement.is_some() {
+                tracing::info!(url = %lan::lan_url(&cfg), "announced on the local network");
+            }
+            announcement
+        }
+        Err(e) => {
+            tracing::warn!(error = %e, "could not announce the server on the local network");
+            None
+        }
+    };
     tracing::info!(
         version = tpt_home_core::VERSION,
         %addr,

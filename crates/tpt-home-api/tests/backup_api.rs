@@ -316,6 +316,11 @@ async fn health_reports_version_and_backup_state() {
     assert_eq!(health["backup_every_hours"], 24);
     assert_eq!(health["backup_keep"], 3);
     assert_eq!(health["failing_jobs"], 0);
+    // The data directory is on a real disk, so both figures are known and
+    // the free space cannot exceed the total.
+    let free = health["disk_free_bytes"].as_u64().expect("free space");
+    let total = health["disk_total_bytes"].as_u64().expect("total space");
+    assert!(total > 0 && free <= total);
 
     send(&app, post_empty_json("/api/admin/backups", &admin)).await;
     let health = body_json(send(&app, get("/api/admin/health", &admin)).await).await;

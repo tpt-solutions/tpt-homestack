@@ -9,6 +9,7 @@
 //! the plugin, renders manifest-declared pages, and supports hot
 //! enable/disable without a restart. See `docs/PLUGINS.md`.
 
+pub mod catalog;
 pub mod dispatch;
 pub mod external;
 pub mod hooks;
@@ -26,6 +27,7 @@ pub mod scope;
 pub mod script;
 #[cfg(feature = "js")]
 pub mod script_worker;
+pub mod signing;
 
 /// Link anchor for the binary: see `tpt-home-cli`'s `BLUEPRINT_LINK_ANCHORS`.
 /// Never called at runtime; its address keeps the plugin host's startup and

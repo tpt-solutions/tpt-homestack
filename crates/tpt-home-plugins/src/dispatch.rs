@@ -355,6 +355,7 @@ pub async fn install_plugin(
     let mut package: Option<Vec<u8>> = None;
     let mut enable: Option<bool> = None;
     let mut granted = Permissions::default();
+    let mut signature: Option<String> = None;
     while let Some(mut field) = multipart
         .next_field()
         .await
@@ -381,6 +382,9 @@ pub async fn install_plugin(
                     "true" | "1" | "on"
                 ));
             }
+            Some("signature") => {
+                signature = Some(field.text().await.unwrap_or_default());
+            }
             Some("approve") => {
                 let list = field.text().await.unwrap_or_default();
                 granted = Permissions::parse_list(&list).map_err(ApiError::bad_request)?;
@@ -392,18 +396,36 @@ pub async fn install_plugin(
     }
     let archive =
         package.ok_or_else(|| ApiError::bad_request("multipart field \"package\" is required"))?;
+    let (status, body) =
+        install_archive(&db, &archive, signature.as_deref(), &granted, enable).await?;
+    Ok((status, Json(body)))
+}
 
-    let (staged, manifest) = lifecycle::stage_package(&archive)
+/// Verify, stage and install one package with the admin's approvals. Shared by
+/// the upload route and the catalog install. `enable` of `None` keeps the
+/// plugin's current state, so an upgrade does not take a running plugin offline.
+pub async fn install_archive(
+    db: &DbPool,
+    archive: &[u8],
+    signature: Option<&str>,
+    granted: &Permissions,
+    enable: Option<bool>,
+) -> Result<(StatusCode, serde_json::Value), ApiError> {
+    let cfg = tpt_home_core::config::try_global()
+        .cloned()
+        .unwrap_or_default();
+    let signed_by = crate::signing::check_install(archive, signature, &cfg)
+        .map_err(|e| ApiError::bad_request(e.to_string()))?;
+
+    let (staged, manifest) = lifecycle::stage_package(archive)
         .map_err(|e| ApiError::bad_request(format!("invalid package: {e}")))?;
-    // Without an explicit `enable`, an upgrade keeps the plugin's current state
-    // rather than taking a running plugin offline.
     let enable = match enable {
         Some(enable) => enable,
-        None => lifecycle::is_enabled(&db, &manifest.plugin.id)
+        None => lifecycle::is_enabled(db, &manifest.plugin.id)
             .await
             .map_err(|e| ApiError::internal(e.to_string()))?,
     };
-    let installed = lifecycle::install_from_dir(&db, &staged, enable, &granted)
+    let installed = lifecycle::install_from_dir(db, &staged, enable, granted)
         .await
         // Almost every failure here is the package or manifest being refused,
         // and the admin needs to read why, so it is a client error.
@@ -412,13 +434,14 @@ pub async fn install_plugin(
 
     Ok((
         StatusCode::CREATED,
-        Json(json!({
+        json!({
             "ok": true,
             "id": installed.plugin.id,
             "version": installed.plugin.version,
             "requested_permissions": installed.permissions.to_json(),
             "approved_permissions": effective.to_json(),
-        })),
+            "signed_by": signed_by,
+        }),
     ))
 }
 

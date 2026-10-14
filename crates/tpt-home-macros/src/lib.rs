@@ -10,6 +10,7 @@
 //! | `#[bp_route(method, path, role?)]` | async fn | Registers an API route under `/api/` |
 //! | `#[bp_ui_route(path, name?)]` | fn | Registers a UI page + sidebar entry |
 //! | `#[bp_job(every = "5m")]` | async fn | Runs the function periodically in the background |
+//! | `#[bp_webhook("feed")]` | async fn | Receives each accepted delivery to a webhook |
 //!
 //! All registration goes through `inventory`, so the server discovers
 //! everything at startup with zero manual wiring. Compile-time checks live
@@ -467,6 +468,52 @@ fn parse_every(text: &str) -> Result<u64, String> {
         return Err(format!("interval '{text}' is too short: minimum is 10s"));
     }
     Ok(secs)
+}
+
+/// Receive webhook deliveries: `#[bp_webhook("feed")]` on
+/// `async fn name(db: DbPool, delivery: WebhookDelivery) -> Result<(), ApiError>`.
+///
+/// The webhook must exist: create it on the Webhooks page (or with
+/// `POST /api/webhooks`). The handler runs after the sender has its `202`,
+/// once for each accepted delivery, in its own task. Its errors are logged,
+/// and a run over a minute is abandoned. The body is the UTF-8 text sent.
+#[proc_macro_attribute]
+pub fn bp_webhook(attr: TokenStream, item: TokenStream) -> TokenStream {
+    let name = parse_macro_input!(attr as LitStr);
+    let item = parse_macro_input!(item as ItemFn);
+
+    let value = name.value();
+    let well_formed = (1..=50).contains(&value.len())
+        && value
+            .chars()
+            .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '_' || c == '-');
+    if !well_formed {
+        return syn::Error::new(
+            name.span(),
+            "webhook names are 1-50 characters of lowercase letters, digits, `_` or `-`",
+        )
+        .to_compile_error()
+        .into();
+    }
+    if item.sig.asyncness.is_none() {
+        return syn::Error::new(item.sig.span(), "#[bp_webhook] functions must be `async`")
+            .to_compile_error()
+            .into();
+    }
+
+    let fn_ident = &item.sig.ident;
+    let expanded = quote! {
+        #item
+
+        tpt_home_core::inventory::submit! {
+            tpt_home_core::WebhookEntry {
+                blueprint: env!("CARGO_PKG_NAME"),
+                webhook: #value,
+                run: |db, delivery| ::std::boxed::Box::pin(#fn_ident(db, delivery)),
+            }
+        }
+    };
+    expanded.into()
 }
 
 #[cfg(test)]

@@ -233,3 +233,10 @@ builds.
 Debug-build crashes on Windows (an access violation on the first plugin DB call) went
 away after upgrading to rusqlite 0.32, which bundles a newer SQLite.
 Release builds are unaffected either way.
+
+## Build profile
+
+Run plugins with a release build: `cargo run --release -- run` (or the release binary).
+A debug build of the server can overflow its stack on a plugin response of a few
+hundred bytes; the release build does not. This is the supported profile for plugins
+until the cause is found (see the Phase 4 note in `todo.md`).

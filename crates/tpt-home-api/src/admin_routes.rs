@@ -167,6 +167,11 @@ pub struct Health {
     pub jobs: usize,
     /// Jobs whose last run did not end `ok`.
     pub failing_jobs: usize,
+    /// Bytes the server can use on the disk holding the data directory (free
+    /// space for non-privileged processes); `None` when the platform cannot say.
+    pub disk_free_bytes: Option<u64>,
+    /// Total bytes on that disk; `None` when the platform cannot say.
+    pub disk_total_bytes: Option<u64>,
 }
 
 /// GET /api/admin/health: version, uptime, database and backup status, and
@@ -197,5 +202,7 @@ pub async fn health(Extension(cfg): Extension<std::sync::Arc<Config>>) -> Json<H
         backup_keep: cfg.backup_keep,
         jobs: jobs.len(),
         failing_jobs: failing,
+        disk_free_bytes: fs4::available_space(&cfg.data_dir).ok(),
+        disk_total_bytes: fs4::total_space(&cfg.data_dir).ok(),
     })
 }

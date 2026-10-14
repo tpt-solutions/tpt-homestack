@@ -21,7 +21,9 @@ inventory = { workspace = true }
 tracing = { workspace = true }
 
 [dev-dependencies]
+sqlx.workspace = true
 tempfile = "3"
 toml = { workspace = true }
 tower = { workspace = true }
+tpt-home-api.workspace = true
 wasmi = { workspace = true }

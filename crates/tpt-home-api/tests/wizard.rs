@@ -253,7 +253,7 @@ async fn the_wizard_page_shows_steps_and_escapes_the_name() {
     assert!(html.contains("Name this server"));
     assert!(html.contains("Family accounts"));
     assert!(html.contains("Connect from anywhere"));
-    assert!(html.contains("app catalog, which is not built yet"));
+    assert!(html.contains("catalog_url"));
     assert!(
         html.contains("&lt;b&gt;Hall&lt;/b&gt;"),
         "name must be escaped"

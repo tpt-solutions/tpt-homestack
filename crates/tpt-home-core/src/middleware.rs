@@ -447,3 +447,86 @@ mod tests {
         assert!(rl.check("api:ip"), "the general bucket is unaffected");
     }
 }
+
+/// With `require_https` set, plain-HTTP requests are redirected to HTTPS
+/// (GET and HEAD) or refused (other methods). See `Config::require_https`.
+/// The settings [`https_required`] needs, passed as router state.
+#[derive(Debug, Clone, Copy)]
+pub struct HttpsPolicy {
+    pub required: bool,
+    pub trust_proxy: bool,
+}
+
+pub async fn https_required(
+    State(policy): State<HttpsPolicy>,
+    req: axum::extract::Request,
+    next: Next,
+) -> Response {
+    if !policy.required || is_https(&req, policy.trust_proxy) {
+        return next.run(req).await;
+    }
+    if matches!(
+        *req.method(),
+        axum::http::Method::GET | axum::http::Method::HEAD
+    ) {
+        let host = req
+            .headers()
+            .get(header::HOST)
+            .and_then(|h| h.to_str().ok());
+        let path = req
+            .uri()
+            .path_and_query()
+            .map(|p| p.as_str())
+            .unwrap_or("/");
+        if let Some(target) = host.and_then(|h| https_location(h, path)) {
+            return (StatusCode::PERMANENT_REDIRECT, [(header::LOCATION, target)]).into_response();
+        }
+    }
+    (StatusCode::FORBIDDEN, "HTTPS is required for this server").into_response()
+}
+
+/// A request is HTTPS when a trusted proxy says so. `X-Forwarded-Proto` is
+/// believed only with `trust_proxy`, for the same reason as `X-Forwarded-For`.
+fn is_https(req: &axum::extract::Request, trust_proxy: bool) -> bool {
+    trust_proxy
+        && req
+            .headers()
+            .get("x-forwarded-proto")
+            .and_then(|v| v.to_str().ok())
+            .and_then(|v| v.split(',').next())
+            .is_some_and(|p| p.trim().eq_ignore_ascii_case("https"))
+}
+
+/// `https://<host><path>` for a redirect. Only plain host names and addresses
+/// and a path without spaces or control characters are accepted, so a crafted
+/// header cannot inject another header into the response.
+pub fn https_location(host: &str, path: &str) -> Option<String> {
+    let host_ok = !host.is_empty()
+        && host.len() <= 255
+        && host
+            .bytes()
+            .all(|b| b.is_ascii_alphanumeric() || matches!(b, b'.' | b'-' | b':' | b'[' | b']'));
+    let path_ok = path.starts_with('/') && !path.bytes().any(|b| b.is_ascii_control() || b == b' ');
+    (host_ok && path_ok).then(|| format!("https://{host}{path}"))
+}
+
+#[cfg(test)]
+mod https_tests {
+    use super::*;
+
+    #[test]
+    fn redirects_only_to_well_formed_hosts_and_paths() {
+        assert_eq!(
+            https_location("home.example.com", "/notes?id=1").as_deref(),
+            Some("https://home.example.com/notes?id=1")
+        );
+        assert_eq!(
+            https_location("192.168.1.5:8080", "/").as_deref(),
+            Some("https://192.168.1.5:8080/")
+        );
+        assert!(https_location("evil.com\r\nSet-Cookie: x", "/").is_none());
+        assert!(https_location("", "/").is_none());
+        assert!(https_location("ok.example", "no-slash").is_none());
+        assert!(https_location("ok.example", "/a b").is_none());
+    }
+}

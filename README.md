@@ -155,7 +155,13 @@ doesn't exist.
 - **Reaching it from outside the house**: [docs/REMOTE_ACCESS.md](docs/REMOTE_ACCESS.md)
   covers Tailscale (private, for family) and Cloudflare Tunnel (a public
   address), with `tpt-home remote status` and `tpt-home remote setup` to check
-  and set them up.
+  and set them up. Netbird, Headscale and Caddy with your own domain are walked
+  through in [docs/REMOTE_ADVANCED.md](docs/REMOTE_ADVANCED.md).
+- **Non-developer guides**: [docs/GETTING_STARTED.md](docs/GETTING_STARTED.md)
+  (set up, first sign-in, troubleshooting) and
+  [docs/FAMILY_SIGN_IN.md](docs/FAMILY_SIGN_IN.md) (adding family members).
+- **Writing plugins**: [docs/PLUGIN_CONTRIBUTING.md](docs/PLUGIN_CONTRIBUTING.md)
+  covers the rules, signing and testing.
 
 ## Architecture in one glance
 
