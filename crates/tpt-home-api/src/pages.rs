@@ -402,7 +402,7 @@ async function testEmail() {
   } catch (e) { box.textContent = 'Not sent: ' + e.message; }
 }
 async function removeEmail() {
-  if (!confirm('Remove the email account and the email channel?')) return;
+  if (!(await confirmDialog('Remove the email account and the email channel?', 'Remove'))) return;
   try {
     await api('/api/notify/email', { method: 'DELETE' });
     show('email account removed', true);

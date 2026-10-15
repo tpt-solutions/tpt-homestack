@@ -39,10 +39,28 @@ pub fn button(label: &str, action: &str, kind: ButtonKind) -> String {
     )
 }
 
+/// A submit button for a [`form`]. Unlike [`button`] it does not call a
+/// global function; the form's `data-submit` handler runs instead.
+pub fn submit(label: &str) -> String {
+    format!("<button type=\"submit\">{}</button>", esc(label))
+}
+
 /// A labelled text input. `id` ties the label to the input.
 pub fn field(label: &str, id: &str, input_type: &str, value: &str) -> String {
+    field_with(label, id, input_type, value, "")
+}
+
+/// A labelled text input with extra attributes, such as `required` or
+/// `autocomplete="current-password"`. `attrs` is trusted static HTML: pass
+/// literal attribute text only, never user data.
+pub fn field_with(label: &str, id: &str, input_type: &str, value: &str, attrs: &str) -> String {
+    let attrs = if attrs.is_empty() {
+        String::new()
+    } else {
+        format!(" {attrs}")
+    };
     format!(
-        "<label for=\"{id}\">{label}</label>\n<input id=\"{id}\" type=\"{ty}\" value=\"{value}\">",
+        "<label for=\"{id}\">{label}</label>\n<input id=\"{id}\" type=\"{ty}\" value=\"{value}\"{attrs}>",
         id = esc(id),
         label = esc(label),
         ty = esc(input_type),
@@ -144,6 +162,37 @@ pub fn toast_region() -> String {
 pub const COMPONENTS_JS: &str = r#"
 function openModal(id) { const d = document.getElementById(id); if (d && !d.open) d.showModal(); }
 function closeModal(id) { const d = document.getElementById(id); if (d && d.open) d.close(); }
+// Use instead of confirm(): the question is part of the page, so it matches the
+// rest of the UI. Resolves true only when the user presses the confirm button;
+// Cancel and Escape resolve false. `danger` styles the confirm button red.
+function confirmDialog(message, okLabel, danger) {
+  return new Promise((resolve) => {
+    const d = document.createElement('dialog');
+    d.className = 'modal';
+    d.setAttribute('aria-label', 'Please confirm');
+    const text = document.createElement('p');
+    text.className = 'confirm-text';
+    text.textContent = message;
+    const row = document.createElement('div');
+    row.className = 'row mt14';
+    const cancel = document.createElement('button');
+    cancel.type = 'button';
+    cancel.className = 'secondary';
+    cancel.textContent = 'Cancel';
+    const ok = document.createElement('button');
+    ok.type = 'button';
+    ok.className = danger === false ? '' : 'danger';
+    ok.textContent = okLabel || 'Continue';
+    row.append(cancel, ok);
+    d.append(text, row);
+    document.body.appendChild(d);
+    cancel.addEventListener('click', () => d.close());
+    ok.addEventListener('click', () => { resolve(true); d.close(); });
+    d.addEventListener('close', () => { resolve(false); d.remove(); });
+    d.showModal();
+    cancel.focus();
+  });
+}
 function toast(text, ok) {
   const region = document.getElementById('toasts');
   if (!region) return;
@@ -161,11 +210,12 @@ dialog.modal { background:var(--card); color:var(--text); border:1px solid var(-
   border-radius:12px; padding:18px; width:min(560px, 92vw); }
 dialog.modal::backdrop { background:rgba(0,0,0,.35); }
 .modal-body { margin-top:12px; }
+.confirm-text { white-space:pre-line; margin:0; }
 .toasts { position:fixed; right:16px; bottom:16px; display:flex; flex-direction:column;
   gap:8px; z-index:50; max-width:min(420px, 92vw); }
 .toast { padding:10px 14px; border-radius:8px; font-size:14px; box-shadow:0 4px 14px rgba(0,0,0,.18); }
-.toast.ok { background:#dcfce7; color:var(--ok); }
-.toast.error { background:#fee2e2; color:var(--danger); }
+.toast.ok { background:var(--ok-bg); color:var(--ok); }
+.toast.error { background:var(--err-bg); color:var(--danger); }
 "#;
 
 #[cfg(test)]
@@ -222,6 +272,28 @@ mod tests {
     }
 
     #[test]
+    fn field_with_adds_static_attributes_and_plain_field_is_unchanged() {
+        let plain = field("Name", "n", "text", "x");
+        assert_eq!(plain, field_with("Name", "n", "text", "x", ""));
+        let strict = field_with(
+            "Pw",
+            "p",
+            "password",
+            "",
+            "required autocomplete=\"new-password\"",
+        );
+        assert!(strict.contains(
+            "<input id=\"p\" type=\"password\" value=\"\" required autocomplete=\"new-password\">"
+        ));
+    }
+
+    #[test]
+    fn submit_is_a_submit_button_and_escapes_its_label() {
+        assert_eq!(submit("Save"), "<button type=\"submit\">Save</button>");
+        assert!(!submit("<b>x</b>").contains("<b>"));
+    }
+
+    #[test]
     fn modal_closes_through_the_dispatcher() {
         assert!(modal("pw", "Change", "").contains("data-click=\"closeModal:pw\""));
     }
@@ -244,5 +316,16 @@ mod tests {
         assert!(html.contains("id=\"toasts\""));
         assert!(html.contains("function toast("));
         assert!(html.contains("function openModal("));
+        assert!(html.contains("function confirmDialog("));
+    }
+
+    #[test]
+    fn pages_ask_with_the_in_app_dialog_not_the_browser_confirm() {
+        let users = crate::users_admin_content(&[]);
+        assert!(
+            !users.contains("confirm("),
+            "users page still calls confirm()"
+        );
+        assert!(users.contains("confirmDialog("));
     }
 }

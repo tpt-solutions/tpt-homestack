@@ -27,6 +27,12 @@ No release has been tagged yet. The first tag will be `v0.1.0`.
 - `tpt-home migrate`, `tpt-home new` (with its error paths tested).
 - `trust_proxy` setting for deployments behind a reverse proxy.
 - Release workflow for Linux x86_64, Linux ARM64 and Windows (not yet run).
+- Browser checks (`scripts/browser-check.mjs`) in CI: every page for console
+  errors and CSP violations, six workflows, phone width, labels and touch
+  sizes, and a Tab-key focus check. The CI job has not run on GitHub yet.
+- Tests for the JavaScript script worker that run real worker processes:
+  results, script errors, loop and deadline limits, the memory limit, and a
+  missing or bad worker.
 
 ### Fixed
 
@@ -44,6 +50,16 @@ No release has been tagged yet. The first tag will be `v0.1.0`.
 - Internal server errors return a generic message to clients. The detail is
   logged only.
 - Quiet hours and alert times use the server's local time zone.
+- Deletes and plugin installs ask with the app's own dialog, not the browser's
+  `confirm()`. Cancel and Escape keep the item.
+- Text on the message, badge and sidebar colours meets WCAG AA (4.5:1) in both
+  light and dark themes. The dark theme's error and success messages were
+  hard to read.
+- Keyboard users get a visible focus ring on every control.
+- On phone widths, buttons, inputs and selects are at least 44 px tall. Wide
+  tables scroll inside their card instead of widening the page.
+- Settings, the plugin form and the Notes, Track and Drop pages build their
+  controls with the shared components.
 
 ### Security
 

@@ -26,12 +26,13 @@ pub fn drop_page(user: &AuthUser) -> Html<String> {
 }
 
 fn content_fragment() -> String {
+    let upload = ui::components::button("Upload", "doUpload", ui::components::ButtonKind::Primary);
     format!(
         "<div class=\"card\">\n\
          <h2 class=\"mt0\">Upload</h2>\n\
          <div class=\"row\">\n\
-         <input type=\"file\" id=\"file\" class=\"s-max-width-340px\">\n\
-         <button data-click=\"doUpload\">Upload</button>\n\
+         <input type=\"file\" id=\"file\" aria-label=\"Choose a file to upload\" class=\"s-max-width-340px\">\n\
+         {upload}\n\
          <span class=\"muted\" id=\"upstatus\"></span>\n</div>\n\
          <div id=\"msg\"></div>\n</div>\n\
          <div id=\"list\"></div>\n\
@@ -76,7 +77,7 @@ async function makeShare(id) {
   } catch (e) { alert(e.message); }
 }
 async function delFile(id) {
-  if (!confirm('Delete this file?')) return;
+  if (!(await confirmDialog('Delete this file?', 'Delete'))) return;
   try { await api('/api/drop/' + id, 'DELETE'); loadList(); } catch (e) { alert(e.message); }
 }
 async function loadList() {

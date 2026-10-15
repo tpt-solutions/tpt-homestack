@@ -190,6 +190,45 @@ async function main() {
       const scrollWidth = await evaluate(`document.documentElement.scrollWidth`);
       report.phoneWidth[path] = { scrollWidth, target: PHONE_WIDTH, sideScroll: scrollWidth > PHONE_WIDTH };
     }
+    // Accessibility audit at phone width. Every visible button, input, select,
+    // textarea and sidebar link must be at least 44 px in both directions
+    // (WCAG 2.5.5), every button must have a name, and every form control must
+    // have a label. Inline text links are exempt from the size rule.
+    const AUDIT = `(() => {
+      const visible = (el) => { const r = el.getBoundingClientRect(); const s = getComputedStyle(el);
+        return r.width > 0 && r.height > 0 && s.visibility !== 'hidden' && !el.closest('dialog:not([open])'); };
+      const labelFor = (el) => el.id && document.querySelector('label[for="' + CSS.escape(el.id) + '"]');
+      const named = (el) => (el.getAttribute('aria-label') || el.getAttribute('aria-labelledby') || el.getAttribute('title') || el.textContent || '').trim() || labelFor(el) || el.closest('label');
+      const issues = [];
+      const sized = [...document.querySelectorAll('button, input:not([type=hidden]), select, textarea, .sidebar nav a')];
+      for (const el of sized) {
+        if (!visible(el)) continue;
+        const r = el.getBoundingClientRect();
+        const what = el.id || (el.textContent || '').trim().slice(0, 30) || el.tagName.toLowerCase();
+        if (r.width < 44 || r.height < 44) issues.push('small target: ' + el.tagName.toLowerCase() + ' ' + what + ' ' + Math.round(r.width) + 'x' + Math.round(r.height));
+        if (el.tagName === 'BUTTON' && !named(el)) issues.push('unnamed button');
+        if (['INPUT', 'SELECT', 'TEXTAREA'].includes(el.tagName) && el.type !== 'hidden' && !named(el)) issues.push('unlabelled ' + el.tagName.toLowerCase() + ' #' + el.id);
+      }
+      return issues;
+    })()`;
+    // Keyboard: the first Tab from the top of each page must land on a control
+    // with a visible focus ring (:focus-visible and a non-empty outline).
+    const pressTab = async () => {
+      await cdp.send('Input.dispatchKeyEvent', { type: 'keyDown', key: 'Tab', code: 'Tab', windowsVirtualKeyCode: 9 });
+      await cdp.send('Input.dispatchKeyEvent', { type: 'keyUp', key: 'Tab', code: 'Tab', windowsVirtualKeyCode: 9 });
+    };
+    const FOCUS = `(() => { const el = document.activeElement; if (!el || el === document.body) return { ok: false, what: 'nothing focused' };
+      const s = getComputedStyle(el);
+      const ring = el.matches(':focus-visible') && s.outlineStyle !== 'none' && parseFloat(s.outlineWidth) > 0;
+      return { ok: ring, what: el.tagName.toLowerCase() + (el.id ? '#' + el.id : '') + (ring ? '' : ' without a visible focus ring') }; })()`;
+    report.accessibility = {};
+    report.keyboard = {};
+    for (const path of PAGES) {
+      await visit(path);
+      report.accessibility[path] = await evaluate(AUDIT);
+      await pressTab();
+      report.keyboard[path] = await evaluate(FOCUS);
+    }
     await cdp.send('Emulation.clearDeviceMetricsOverride');
 
     // Workflow: notes. Open the editor, fill it in, save, and find the note.
@@ -201,6 +240,17 @@ async function main() {
     const clickInCard = (containsText, text) =>
       evaluate(
         `(() => { const card = [...document.querySelectorAll('.card')].find(c => c.innerText.includes(${JSON.stringify(containsText)})); const b = card && [...card.querySelectorAll('button')].find(x => x.textContent.trim() === ${JSON.stringify(text)}); if (!b) return false; b.click(); return true; })()`,
+      );
+    // Pages ask before a delete with their own dialog (confirmDialog), not the
+    // browser's confirm(). Press the named button once that dialog is open.
+    const pressInDialog = (label) =>
+      waitFor(
+        () =>
+          evaluate(
+            `(() => { const d = document.querySelector('dialog[aria-label="Please confirm"][open]'); const b = d && [...d.querySelectorAll('button')].find(x => x.textContent.trim() === ${JSON.stringify(label)}); if (!b) return false; b.click(); return true; })()`,
+          ),
+        `the "${label}" button in the confirm dialog`,
+        5000,
       );
     const title = `browser note ${Date.now()}`;
     const steps = {};
@@ -253,8 +303,8 @@ async function main() {
     tr.addRow = await clickButton('Add row');
     await sleep(800);
     tr.rowShown = await evaluate(`document.getElementById('rowsview').innerText.includes('coffee')`);
-    await evaluate(`window.confirm = () => true;`);
     tr.deleteTable = await clickInCard(tname, 'Delete');
+    tr.confirmed = await pressInDialog('Delete');
     await sleep(800);
     tr.gone = await evaluate(`!document.getElementById('tables').innerText.includes(${JSON.stringify(tname)})`);
     // The page reports most failures in #msg rather than the console; keep it.
@@ -275,8 +325,13 @@ async function main() {
     dr.upload = await clickButton('Upload');
     await sleep(1200);
     dr.listed = await evaluate(`document.getElementById('list').innerText.includes(${JSON.stringify(dname)})`);
-    await evaluate(`window.confirm = () => true;`);
+    // Cancel must keep the file; then delete for real.
+    dr.askedToDelete = await clickInCard(dname, 'Delete');
+    dr.cancelled = await pressInDialog('Cancel');
+    await sleep(500);
+    dr.keptAfterCancel = await evaluate(`document.getElementById('list').innerText.includes(${JSON.stringify(dname)})`);
     dr.delete = await clickInCard(dname, 'Delete');
+    dr.confirmed = await pressInDialog('Delete');
     await sleep(800);
     dr.gone = await evaluate(`!document.getElementById('list').innerText.includes(${JSON.stringify(dname)})`);
     report.workflows.drop = { steps: dr, ok: Object.values(dr).every(Boolean), logs: logs.slice() };
@@ -318,13 +373,14 @@ async function main() {
     await evaluate(`[...document.querySelectorAll('#pw-modal button')].find(b => b.textContent.trim() === 'Set password').click(); true`);
     await sleep(800);
     us.toastShown = await evaluate(`[...document.querySelectorAll('#toasts .toast')].some(t => t.textContent.includes('password updated'))`);
-    us.deleted = await evaluate(`window.confirm = () => true; (() => {
+    us.deleted = await evaluate(`(() => {
       const row = [...document.querySelectorAll('tbody tr')].find(r => r.innerText.includes(${JSON.stringify(uname)}));
       const btn = row && [...row.querySelectorAll('button')].find(b => b.textContent.trim() === 'Delete');
       if (!btn) return false;
       btn.click();
       return true;
     })()`);
+    us.confirmed = await pressInDialog('Delete');
     await sleep(800);
     await visit('/admin/users');
     us.gone = await evaluate(`![...document.querySelectorAll('tbody tr')].some(r => r.innerText.includes(${JSON.stringify(uname)}))`);
@@ -370,13 +426,17 @@ async function main() {
   const pageFailures = Object.entries(report.pages).filter(([, logs]) => logs.length > 0);
   const workflowFailures = Object.entries(report.workflows).filter(([, w]) => !w.ok);
   const sideScrolls = Object.entries(report.phoneWidth).filter(([, m]) => m.sideScroll);
+  const a11yFailures = Object.entries(report.accessibility).filter(([, issues]) => issues.length > 0);
+  const keyboardFailures = Object.entries(report.keyboard).filter(([, k]) => !k.ok);
   console.log(JSON.stringify(report, null, 2));
   console.error(
     `pages with problems: ${pageFailures.length}/${PAGES.length}; ` +
       `workflows failing: ${workflowFailures.length}/${Object.keys(report.workflows).length}; ` +
-      `pages scrolling sideways at 390 px: ${sideScrolls.length}/${PAGES.length}`,
+      `pages scrolling sideways at 390 px: ${sideScrolls.length}/${PAGES.length}; ` +
+      `pages with accessibility issues: ${a11yFailures.length}/${PAGES.length}; ` +
+      `pages where Tab has no visible focus: ${keyboardFailures.length}/${PAGES.length}`,
   );
-  process.exit(pageFailures.length || workflowFailures.length || sideScrolls.length ? 1 : 0);
+  process.exit(pageFailures.length || workflowFailures.length || sideScrolls.length || a11yFailures.length || keyboardFailures.length ? 1 : 0);
 }
 
 main().catch((e) => {

@@ -70,3 +70,33 @@ jobs:
       - run: rustup toolchain install stable --profile minimal
       - uses: Swatinem/rust-cache@v2
       - run: bash scripts/check-templates.sh
+
+  browser:
+    name: Browser checks (pages, workflows, accessibility, phone width)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: rustup toolchain install stable --profile minimal
+      - uses: Swatinem/rust-cache@v2
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - run: cargo build -p tpt-home-cli
+      - name: Start a fresh server
+        run: |
+          ./target/debug/tpt-home --data-dir "$RUNNER_TEMP/data" init --admin-user admin --admin-password browser-check-pass-1
+          TPT_HOME_PORT=18090 nohup ./target/debug/tpt-home --data-dir "$RUNNER_TEMP/data" run > "$RUNNER_TEMP/server.log" 2>&1 &
+          for i in $(seq 1 60); do
+            if curl -fsS http://127.0.0.1:18090/login > /dev/null; then exit 0; fi
+            sleep 1
+          done
+          cat "$RUNNER_TEMP/server.log"
+          exit 1
+      - name: Run the browser checks (Chrome is preinstalled on the runner)
+        run: node scripts/browser-check.mjs --base http://127.0.0.1:18090 --password browser-check-pass-1 --browser /usr/bin/google-chrome
+      - name: Keep the server log when a check fails
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: server-log
+          path: ${{ runner.temp }}/server.log

@@ -33,14 +33,18 @@ pub fn esc(s: &str) -> String {
 /// Base stylesheet. Light/dark via `prefers-color-scheme`, zero JS.
 pub const CSS: &str = r#"
 :root { --bg:#f5f6f8; --card:#ffffff; --text:#1c2430; --muted:#5c6672;
-        --line:#dde2e8; --accent:#2563eb; --accent-soft:#dbeafe;
-        --danger:#dc2626; --ok:#16a34a; }
+        --line:#dde2e8; --accent:#2563eb; --accent-ink:#1d4ed8; --accent-soft:#dbeafe;
+        --btn:#2563eb; --danger:#b91c1c; --ok:#15803d;
+        --err-bg:#fee2e2; --ok-bg:#dcfce7; }
 @media (prefers-color-scheme: dark) {
   :root { --bg:#12161c; --card:#1a212b; --text:#e6eaf0; --muted:#98a2ae;
-          --line:#2a3340; --accent:#3b82f6; --accent-soft:#1e3a5f;
-          --danger:#ef4444; --ok:#22c55e; }
+          --line:#2a3340; --accent:#60a5fa; --accent-ink:#93c5fd; --accent-soft:#1e3a5f;
+          --btn:#1d4ed8; --danger:#f87171; --ok:#4ade80;
+          --err-bg:#3b1d22; --ok-bg:#17331f; }
 }
 * { box-sizing:border-box; }
+/* A visible focus ring for keyboard users. Never remove it. */
+:focus-visible { outline:3px solid var(--accent); outline-offset:2px; }
 body { margin:0; font:15px/1.5 system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;
        background:var(--bg); color:var(--text); }
 a { color:var(--accent); text-decoration:none; }
@@ -52,7 +56,7 @@ a:hover { text-decoration:underline; }
 .sidebar nav a { display:block; padding:8px 10px; border-radius:8px;
                  color:var(--text); margin-bottom:2px; }
 .sidebar nav a:hover { background:var(--accent-soft); text-decoration:none; }
-.sidebar nav a.active { background:var(--accent-soft); color:var(--accent); font-weight:600; }
+.sidebar nav a.active { background:var(--accent-soft); color:var(--accent-ink); font-weight:600; }
 .sidebar .who { margin-top:22px; font-size:13px; color:var(--muted); }
 .sidebar .who a { display:inline-block; margin-right:8px; }
 .main { flex:1; padding:26px 32px; max-width:980px; }
@@ -63,12 +67,13 @@ h2 { font-size:16px; margin:22px 0 8px; }
 .grid { display:grid; grid-template-columns:repeat(auto-fill,minmax(230px,1fr)); gap:14px; }
 .muted { color:var(--muted); font-size:13px; }
 .badge { display:inline-block; padding:1px 8px; border-radius:99px; font-size:12px;
-         background:var(--accent-soft); color:var(--accent); }
-.badge.warn { background:#fee2e2; color:var(--danger); }
-button, .btn { background:var(--accent); color:#fff; border:0; border-radius:8px;
+         background:var(--accent-soft); color:var(--accent-ink); }
+.badge.warn { background:var(--err-bg); color:var(--danger); }
+button, .btn { background:var(--btn); color:#fff; border:0; border-radius:8px;
         padding:8px 14px; font-size:14px; cursor:pointer; }
 button.secondary { background:transparent; color:var(--accent); border:1px solid var(--accent); }
 button.danger { background:transparent; color:var(--danger); border:1px solid var(--danger); }
+td select { width:auto; min-width:120px; }
 input, select, textarea { background:var(--bg); color:var(--text); border:1px solid var(--line);
         border-radius:8px; padding:8px 10px; font-size:14px; width:100%; }
 label { display:block; font-size:13px; color:var(--muted); margin:10px 0 4px; }
@@ -77,8 +82,8 @@ th, td { text-align:left; padding:8px 10px; border-bottom:1px solid var(--line);
 th { color:var(--muted); font-weight:600; }
 .center { max-width:380px; margin:12vh auto 0; }
 .msg { padding:10px 12px; border-radius:8px; margin-bottom:12px; font-size:14px; }
-.msg.error { background:#fee2e2; color:var(--danger); }
-.msg.ok { background:#dcfce7; color:var(--ok); }
+.msg.error { background:var(--err-bg); color:var(--danger); }
+.msg.ok { background:var(--ok-bg); color:var(--ok); }
 .row { display:flex; gap:10px; align-items:center; flex-wrap:wrap; }
 .spread { display:flex; justify-content:space-between; align-items:center; gap:10px; }
 code, pre { font-family:ui-monospace,SFMono-Regular,Consolas,monospace; }
@@ -88,7 +93,10 @@ pre.md { background:var(--bg); border:1px solid var(--line); border-radius:8px;
 @media (max-width: 760px) {
   .layout { flex-direction:column; }
   .sidebar { width:auto; flex:none; border-right:0; border-bottom:1px solid var(--line); }
+  .sidebar nav a { padding:12px 10px; }
   .main { padding:16px; }
+  /* Touch targets: at least 44 px tall on phones (WCAG 2.5.5). */
+  button, .btn, input, select, textarea { min-height:44px; }
 }
 /* Utility classes. Pages use these instead of style attributes, so the
    Content-Security-Policy can refuse inline styles. */
@@ -284,19 +292,41 @@ pub fn dashboard_content(blueprints: &[(&str, &str)]) -> String {
 
 /// Settings page: change your own password.
 pub fn settings_content() -> String {
-    // A plain literal, not a format string: braces here are real JavaScript.
-    // The script must use only what this page defines (`fetch`), and it shows
-    // server messages as text, not HTML.
-    r#"<div class="card w420">
-<h2 class="mt0">Change password</h2>
-<form data-submit="doPwChange">
-<label for="cur">Current password</label><input id="cur" type="password" autocomplete="current-password" required>
-<label for="new">New password (min 8 chars)</label><input id="new" type="password" autocomplete="new-password" required>
-<div id="pwmsg"></div>
-<div class="mt14"><button type="submit">Update password</button></div>
-</form>
+    let fields = format!(
+        "{}
+{}
+<div id=\"pwmsg\"></div>
+<div class=\"mt14\">{}</div>",
+        components::field_with(
+            "Current password",
+            "cur",
+            "password",
+            "",
+            "autocomplete=\"current-password\" required",
+        ),
+        components::field_with(
+            "New password (min 8 chars)",
+            "new",
+            "password",
+            "",
+            "autocomplete=\"new-password\" required",
+        ),
+        components::submit("Update password"),
+    );
+    format!(
+        "<div class=\"card w420\">
+<h2 class=\"mt0\">Change password</h2>
+{}
 </div>
-<script>
+{SETTINGS_SCRIPT}",
+        components::form("doPwChange", &fields)
+    )
+}
+
+/// The settings page script. A plain literal, not a format string: braces here
+/// are real JavaScript. It uses only what this page defines (`fetch`), and it
+/// shows server messages as text, not HTML.
+const SETTINGS_SCRIPT: &str = r#"<script>
 async function doPwChange(ev) {
   ev.preventDefault();
   const msg = document.getElementById('pwmsg');
@@ -321,9 +351,7 @@ async function doPwChange(ev) {
   }
   return false;
 }
-</script>"#
-        .to_string()
-}
+</script>"#;
 
 #[cfg(test)]
 mod settings_tests {
@@ -360,7 +388,7 @@ pub fn users_admin_content(users: &[UserRow]) -> String {
                 "<span class=\"badge\">active</span>".to_string()
             };
             let role_sel = format!(
-                "<select data-change=\"setRole:{}\">{}{} </select>",
+                "<select data-change=\"setRole:{}\" aria-label=\"Role\">{}{} </select>",
                 u.id,
                 if u.role == "admin" {
                     "<option value=\"admin\" selected>admin</option><option value=\"user\">user</option>"
@@ -390,11 +418,11 @@ pub fn users_admin_content(users: &[UserRow]) -> String {
     format!(
         "<div class=\"card\">\n<h2 class=\"mt0\">Create user</h2>\n\
          <form data-submit=\"doCreate\">\n\
-         <div class=\"row\"><input id=\"nu\" placeholder=\"username\" required class=\"w200\">\n\
-         <input id=\"np\" type=\"password\" placeholder=\"password\" required class=\"w200\">\n\
-         <select id=\"nr\"><option value=\"user\">user</option><option value=\"admin\">admin</option></select>\n\
+         <div class=\"row\"><input id=\"nu\" placeholder=\"username\" aria-label=\"New username\" required class=\"w200\">\n\
+         <input id=\"np\" type=\"password\" placeholder=\"password\" aria-label=\"New password\" required class=\"w200\">\n\
+         <select id=\"nr\" aria-label=\"New user role\"><option value=\"user\">user</option><option value=\"admin\">admin</option></select>\n\
          <button type=\"submit\">Create</button></div>\n</form>\n</div>\n\
-         <div class=\"card\">\n<table>\n<thead><tr><th>#</th><th>User</th><th>Status</th><th>Role</th><th>Actions</th></tr></thead>\n\
+         <div class=\"card scroll-x\">\n<table>\n<thead><tr><th>#</th><th>User</th><th>Status</th><th>Role</th><th>Actions</th></tr></thead>\n\
          <tbody>{rows}</tbody>\n</table>\n</div>\n{pw_modal}\n\
          <script>\nasync function api(url, method, body) {{\n  const r = await fetch(url, {{method, headers:{{'Content-Type':'application/json'}}, body: body ? JSON.stringify(body) : undefined}});\n  const j = await r.json().catch(() => ({{}}));\n  if (!r.ok) throw new Error(j.error || r.statusText);\n  return j;\n}}\n\
          function reload() {{ location.reload(); }}\nasync function doCreate(ev) {{ ev.preventDefault(); try {{ await api('/api/admin/users', 'POST', {{username: nu.value, password: np.value, role: nr.value}}); reload(); }} catch (e) {{ toast(e.message, false); }} return false; }}\n\
@@ -403,7 +431,7 @@ pub fn users_admin_content(users: &[UserRow]) -> String {
          let pwTarget = null;
 async function resetPw(id) {{ pwTarget = id; document.getElementById('pw-new').value = ''; openModal('pw-modal'); }}
 async function savePw() {{ const pw = document.getElementById('pw-new').value; if (pw.length < 8) {{ toast('password must be at least 8 characters', false); return; }} try {{ await api('/api/admin/users/' + pwTarget, 'PATCH', {{password: pw}}); closeModal('pw-modal'); toast('password updated', true); }} catch (e) {{ toast(e.message, false); }} }}
-         async function delUser(id) {{ if (!confirm('Delete user ' + id + '?')) return; try {{ await api('/api/admin/users/' + id, 'DELETE'); reload(); }} catch (e) {{ toast(e.message, false); }} }}\n</script>"
+         async function delUser(id) {{ if (!(await confirmDialog('Delete user ' + id + '?', 'Delete'))) return; try {{ await api('/api/admin/users/' + id, 'DELETE'); reload(); }} catch (e) {{ toast(e.message, false); }} }}\n</script>"
     )
 }
 
@@ -451,13 +479,13 @@ pub fn plugins_admin_content() -> String {
         "<div class=\"card\">\n<h2 class=\"mt0\">Install a plugin</h2>\n\
          <form data-submit=\"installPlugin\">\n\
          <p>Choose a <code>.tptp</code> package. Only the ticked abilities are granted; the plugin is refused anything else.</p>\n\
-         <input id=\"pkg\" type=\"file\" accept=\".tptp\" required>\n\
+         <input id=\"pkg\" type=\"file\" accept=\".tptp\" aria-label=\"Plugin package (.tptp)\" required>\n\
          <p class=\"muted\">If the publisher sent a signature file (<code>.sig</code>), choose it too. A signed package installs only when its key is trusted by this server.</p>\n\
-         <input id=\"sig\" type=\"file\" accept=\".sig,text/plain\">\n\
+         <input id=\"sig\" type=\"file\" accept=\".sig,text/plain\" aria-label=\"Signature file (optional)\">\n\
          <fieldset><legend>Allow this plugin to</legend>\n{boxes}</fieldset>\n\
          <label class=\"check\"><input type=\"checkbox\" id=\"pen\" checked> Enable after install</label>\n\
          <button type=\"submit\">Install</button>\n</form>\n</div>\n\
-         <div class=\"card\">\n<table>\n<thead><tr><th>Plugin</th><th>Status</th><th>Allowed to</th><th>Actions</th></tr></thead>\n\
+         <div class=\"card scroll-x\">\n<table>\n<thead><tr><th>Plugin</th><th>Status</th><th>Allowed to</th><th>Actions</th></tr></thead>\n\
          <tbody id=\"plugins\"><tr><td colspan=\"4\">Loading…</td></tr></tbody>\n</table>\n</div>\n\
          <div class=\"card\">\n<div class=\"row between\"><h2 class=\"m0\">Plugin catalog</h2>\
          <button class=\"secondary\" data-click=\"loadCatalog\">Load catalog</button></div>\n\
@@ -487,7 +515,7 @@ pub fn plugins_admin_content() -> String {
            const p = catalogPlugins.find((x) => x.id === id);\n\
            if (!p) {{ toast('reload the catalog first', false); return; }}\n\
            const abilities = p.permissions_plain.length ? p.permissions_plain.map((s) => '- ' + s).join('\\n') : '- Nothing';\n\
-           if (!confirm('Install ' + p.name + ' ' + p.version + '?\\n\\nIt will be allowed to:\\n' + abilities)) return;\n\
+           if (!(await confirmDialog('Install ' + p.name + ' ' + p.version + '?\\n\\nIt will be allowed to:\\n' + abilities, 'Install', false))) return;\n\
            try {{\n\
              await api('/api/plugins/catalog/install', 'POST', {{id: p.id, approve: p.permissions, enable: true}});\n\
              toast('installed ' + p.id, true);\n\
@@ -546,7 +574,7 @@ pub fn plugins_admin_content() -> String {
          }}\n\
          async function removePlugin(id, keep) {{\n\
            const msg = keep === 'true' ? 'Remove ' + id + ' and keep its data?' : 'Remove ' + id + ' and delete all its data? This cannot be undone.';\n\
-           if (!confirm(msg)) return;\n\
+           if (!(await confirmDialog(msg, 'Remove'))) return;\n\
            try {{ await api('/api/plugins/' + encodeURIComponent(id) + '?keep_data=' + keep, 'DELETE'); toast('removed ' + id, true); loadPlugins(); }} catch (e) {{ toast(e.message, false); }}\n\
          }}\n\
          loadPlugins();\n</script>"
@@ -672,7 +700,7 @@ pub fn plugin_table_page(
         body.push_str("</tr>\n");
     }
     format!(
-        "<div class=\"card\">\n<table>\n<thead><tr>{headers}</tr></thead>\n<tbody>{body}</tbody>\n</table>\n\
+        "<div class=\"card scroll-x\">\n<table>\n<thead><tr>{headers}</tr></thead>\n<tbody>{body}</tbody>\n</table>\n\
          <p class=\"muted\">Rows served from the plugin's scoped table. Add data via \
          <code>POST {api_base}</code>.</p>\n</div>"
     )
@@ -733,23 +761,19 @@ pub fn plugin_detail_page(columns: &[String], row: Option<&serde_json::Value>) -
 pub fn plugin_form_page(fields: &[String], action: &str) -> String {
     let inputs: String = fields
         .iter()
-        .map(|f| {
-            format!(
-                "<label for=\"pf_{}\">{}</label><input id=\"pf_{}\" name=\"{}\">",
-                esc(f),
-                esc(f),
-                esc(f),
-                esc(f)
-            )
-        })
-        .collect();
+        .map(|f| components::field(f, &format!("pf_{f}"), "text", ""))
+        .collect::<Vec<_>>()
+        .join("\n");
+    let body = format!(
+        "{inputs}\n<div class=\"mt14\">{}</div>",
+        components::submit("Submit")
+    );
     let field_names: Vec<String> = fields.iter().map(|f| format!("'{f}'")).collect();
     format!(
-        "<div class=\"card w480\">\n\
-         <form data-submit=\"doSubmit\">\n{inputs}\n\
-         <div class=\"mt14\"><button type=\"submit\">Submit</button></div>\n</form>\n\
+        "<div class=\"card w480\">\n{}\n\
          <div id=\"pmsg\"></div>\n</div>\n\
          <script>\nasync function doSubmit(ev) {{\n  ev.preventDefault();\n  const body = {{}};\n  for (const f of [{}]) body[f] = document.getElementById('pf_' + f).value;\n  const r = await fetch('{action}', {{method:'POST', headers:{{'Content-Type':'application/json'}}, body: JSON.stringify(body)}});\n  const j = await r.json().catch(() => ({{}}));\n  const msg = document.getElementById('pmsg');\n  msg.innerHTML = r.ok ? '<div class=\"msg ok\">saved</div>' : '<div class=\"msg error\">' + (j.error || r.statusText) + '</div>';\n  return false;\n}}\n</script>",
+        components::form("doSubmit", &body),
         field_names.join(", ")
     )
 }
@@ -1038,5 +1062,127 @@ mod capability_label_tests {
     #[test]
     fn unknown_capability_gets_a_generic_label() {
         assert_eq!(capability_label("teleport"), "Use an unknown capability");
+    }
+}
+
+/// Colour contrast for the stylesheet's text on background pairs, read from the
+/// tokens in [`CSS`] so a change to a colour is checked against WCAG AA.
+#[cfg(test)]
+mod contrast_tests {
+    use super::CSS;
+    use std::collections::HashMap;
+
+    /// `--name:#rrggbb` declarations in `block`.
+    fn tokens(block: &str) -> HashMap<String, [u8; 3]> {
+        let mut out = HashMap::new();
+        for part in block.split("--").skip(1) {
+            let Some((name, rest)) = part.split_once(':') else {
+                continue;
+            };
+            let name = name.trim();
+            let hex = rest.trim_start();
+            if name.is_empty() || !name.chars().all(|c| c.is_ascii_lowercase() || c == '-') {
+                continue;
+            }
+            if let Some(hex) = hex.strip_prefix('#').and_then(|h| h.get(..6)) {
+                let channel = |i: usize| u8::from_str_radix(&hex[i..i + 2], 16).ok();
+                if let (Some(r), Some(g), Some(b)) = (channel(0), channel(2), channel(4)) {
+                    out.insert(name.to_string(), [r, g, b]);
+                }
+            }
+        }
+        out
+    }
+
+    fn luminance([r, g, b]: [u8; 3]) -> f64 {
+        let lin = |c: u8| {
+            let v = f64::from(c) / 255.0;
+            if v <= 0.03928 {
+                v / 12.92
+            } else {
+                ((v + 0.055) / 1.055).powf(2.4)
+            }
+        };
+        0.2126 * lin(r) + 0.7152 * lin(g) + 0.0722 * lin(b)
+    }
+
+    fn ratio(a: [u8; 3], b: [u8; 3]) -> f64 {
+        let (x, y) = (luminance(a), luminance(b));
+        let (hi, lo) = if x > y { (x, y) } else { (y, x) };
+        (hi + 0.05) / (lo + 0.05)
+    }
+
+    /// The light palette, then the dark one, from the stylesheet.
+    fn palettes() -> [(&'static str, HashMap<String, [u8; 3]>); 2] {
+        let dark_at = CSS
+            .find("@media (prefers-color-scheme: dark)")
+            .expect("dark palette block");
+        let light = tokens(&CSS[..dark_at]);
+        let dark = tokens(&CSS[dark_at..]);
+        [("light", light), ("dark", dark)]
+    }
+
+    /// Text colour, background colour pairs the pages actually use.
+    const PAIRS: &[(&str, &str)] = &[
+        ("text", "bg"),
+        ("text", "card"),
+        ("muted", "bg"),
+        ("muted", "card"),
+        ("accent", "bg"),
+        ("accent", "card"),
+        ("accent-ink", "accent-soft"),
+        ("danger", "card"),
+        ("danger", "err-bg"),
+        ("ok", "card"),
+        ("ok", "ok-bg"),
+    ];
+
+    #[test]
+    fn text_on_every_surface_meets_wcag_aa() {
+        for (theme, colours) in palettes() {
+            for (fg, bg) in PAIRS {
+                let f = colours
+                    .get(*fg)
+                    .unwrap_or_else(|| panic!("{theme}: --{fg}"));
+                let b = colours
+                    .get(*bg)
+                    .unwrap_or_else(|| panic!("{theme}: --{bg}"));
+                let r = ratio(*f, *b);
+                assert!(
+                    r >= 4.5,
+                    "{theme}: --{fg} on --{bg} is {r:.2}:1, needs 4.5:1"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn white_label_on_the_primary_button_meets_wcag_aa() {
+        for (theme, colours) in palettes() {
+            let btn = colours
+                .get("btn")
+                .unwrap_or_else(|| panic!("{theme}: --btn"));
+            let r = ratio([255, 255, 255], *btn);
+            assert!(r >= 4.5, "{theme}: white on --btn is {r:.2}:1");
+        }
+    }
+
+    #[test]
+    fn focus_rings_are_never_removed() {
+        assert!(!CSS.contains("outline:none") && !CSS.contains("outline: none"));
+        assert!(!CSS.contains("outline:0") && !CSS.contains("outline: 0"));
+        assert!(CSS.contains(":focus-visible"));
+    }
+
+    #[test]
+    fn the_check_reads_real_colours() {
+        // Guards against the parser silently finding nothing.
+        for (theme, colours) in palettes() {
+            assert!(
+                colours.len() >= 10,
+                "{theme}: only {} tokens parsed",
+                colours.len()
+            );
+        }
     }
 }

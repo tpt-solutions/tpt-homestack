@@ -26,13 +26,27 @@ pub fn notes_page(user: &AuthUser) -> Html<String> {
 }
 
 fn content_fragment() -> String {
+    let search = ui::components::button("Search", "loadNotes", ui::components::ButtonKind::Primary);
+    let new_note = ui::components::button(
+        "New note",
+        "openEditor",
+        ui::components::ButtonKind::Secondary,
+    );
+    let save = ui::components::button("Save", "saveNote", ui::components::ButtonKind::Primary);
+    let preview = ui::components::button(
+        "Preview",
+        "previewNote",
+        ui::components::ButtonKind::Secondary,
+    );
+    let cancel =
+        ui::components::button("Cancel", "closeEditor", ui::components::ButtonKind::Danger);
     format!(
         "<div id=\"notes-root\">\n\
          <div class=\"card\">\n\
          <div class=\"row\">\n\
-         <input id=\"q\" placeholder=\"Search notes…\" class=\"s-max-width-340px\">\n\
-         <button data-click=\"loadNotes\">Search</button>\n\
-         <button class=\"secondary\" data-click=\"openEditor\">New note</button>\n\
+         <input id=\"q\" placeholder=\"Search notes…\" aria-label=\"Search notes\" class=\"s-max-width-340px\">\n\
+         {search}\n\
+         {new_note}\n\
          </div>\n<div id=\"msg\"></div>\n</div>\n\
          <div id=\"editor\" class=\"card s-display-none\">\n\
          <input id=\"eid\" type=\"hidden\">\n\
@@ -40,9 +54,9 @@ fn content_fragment() -> String {
          <label for=\"etags\">Tags (comma separated)</label><input id=\"etags\">\n\
          <label for=\"ebody\">Body (markdown)</label><textarea id=\"ebody\" rows=\"12\"></textarea>\n\
          <div class=\"row s-margin-top-12px\">\n\
-         <button data-click=\"saveNote\">Save</button>\n\
-         <button class=\"secondary\" data-click=\"previewNote\">Preview</button>\n\
-         <button class=\"danger\" data-click=\"closeEditor\">Cancel</button>\n\
+         {save}\n\
+         {preview}\n\
+         {cancel}\n\
          </div>\n<div id=\"preview\" class=\"msg s-display-none\"></div>\n</div>\n\
          <div id=\"list\"></div>\n</div>\n<script>\n{}\n</script>",
         r#"async function api(url, method, body) {
@@ -101,7 +115,7 @@ async function saveNote() {
   } catch (e) { alert(e.message); }
 }
 async function delNote(id) {
-  if (!confirm('Delete note?')) return;
+  if (!(await confirmDialog('Delete note?', 'Delete'))) return;
   try { await api('/api/notes/' + id, 'DELETE'); loadNotes(); } catch (e) { alert(e.message); }
 }
 async function previewNote() {

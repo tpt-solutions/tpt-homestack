@@ -25,16 +25,28 @@ pub fn track_page(user: &AuthUser) -> Html<String> {
 }
 
 fn content_fragment() -> String {
+    let new_table = ui::components::button(
+        "New table",
+        "showNewTable",
+        ui::components::ButtonKind::Primary,
+    );
+    let add_field = ui::components::button(
+        "+ field",
+        "addFieldRow",
+        ui::components::ButtonKind::Secondary,
+    );
+    let create =
+        ui::components::button("Create", "createTable", ui::components::ButtonKind::Primary);
     format!(
         "<div class=\"card\">\n\
          <div class=\"spread\">\n<h2 class=\"m0\">Tables</h2>\n\
-         <button data-click=\"showNewTable\">New table</button>\n</div>\n\
+         {new_table}\n</div>\n\
          <div id=\"newtable\" class=\"s-display-none\">\n\
          <label for=\"tname\">Table name</label><input id=\"tname\" class=\"s-max-width-280px\">\n\
          <div id=\"fields\"></div>\n\
          <div class=\"row mt8\">\n\
-         <button class=\"secondary\" data-click=\"addFieldRow\">+ field</button>\n\
-         <button data-click=\"createTable\">Create</button>\n</div>\n</div>\n\
+         {add_field}\n\
+         {create}\n</div>\n</div>\n\
          <div id=\"msg\"></div>\n</div>\n\
          <div id=\"tables\"></div>\n\
          <div id=\"rowsview\"></div>\n\
@@ -94,7 +106,7 @@ async function loadTables() {
   } catch (e) { fail(e); }
 }
 async function delTable(id) {
-  if (!confirm('Delete this table and all its rows?')) return;
+  if (!(await confirmDialog('Delete this table and all its rows?', 'Delete'))) return;
   try { await api('/api/track/tables/' + id, 'DELETE'); loadTables(); document.getElementById('rowsview').innerHTML = ''; } catch (e) { fail(e); }
 }
 function fieldByCol(t, col) { return t.fields.find(f => 'f_' + f.id === col); }
