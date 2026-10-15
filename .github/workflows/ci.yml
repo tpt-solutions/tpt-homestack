@@ -53,6 +53,15 @@ jobs:
         with:
           command: check licenses bans advisories sources
 
+  size:
+    name: Release binary size (30 MiB target)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: rustup toolchain install stable --profile minimal
+      - uses: Swatinem/rust-cache@v2
+      - run: bash scripts/check-size.sh
+
   templates:
     name: Starter templates build
     runs-on: ubuntu-latest

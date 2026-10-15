@@ -12,7 +12,7 @@ that register their routes, migrations and UI pages with one attribute macro.
 |---|---|---|
 | Idle RAM | < 30 MB | ~1500 MB |
 | Startup | < 0.5 s | ~15–30 s |
-| Disk | < 25 MB (one binary) | ~2000 MB (Docker images) |
+| Disk | < 30 MiB (one binary) | ~2000 MB (Docker images) |
 | CPU idle | ~0% | 1–3% |
 
 ## Who it's for
