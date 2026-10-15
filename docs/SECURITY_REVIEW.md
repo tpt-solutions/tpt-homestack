@@ -59,10 +59,10 @@ browser-side behaviour of every page.
 
 These must be closed, or explicitly accepted, before the gate opens.
 
-1. **Inline styles are still allowed; inline scripts are not.** Scripts now
-   need a per-response nonce, and inline event handlers are refused (fix 8).
-   Styles keep `'unsafe-inline'` because pages use `style=` attributes. An
-   injected style cannot run code, so the risk is lower, but it is still open.
+1. **Closed: inline styles.** Scripts and styles both need a per-response nonce,
+   inline event handlers are refused (fix 8), and the pages no longer use
+   `style=` attributes (they use utility classes). `'unsafe-inline'` is gone from
+   both policies, and `html_pages_allow_only_nonced_scripts` checks it.
 2. **Cookie setting still matters.** Multipart uploads now also need the
    `X-TPT-Request` header (fix 5), so a cross-site form cannot forge them. The
    session cookie is still `SameSite=Lax` and should stay that way; it is the
@@ -117,3 +117,14 @@ node scripts/browser-check.mjs --base http://127.0.0.1:8080 --password '...'
 protocol. It loads each page, reports console errors and CSP violations, and
 runs the notes, settings, track, drop and users workflows by clicking the real
 controls. It fails on any violation or failed step.
+
+## Found and fixed in the 2026-10-15 review
+
+- **Admin routes registered by hand had no role check.** The notification channel
+  list and save, the notification channel delete, the email settings and the hook
+  secret rotation were declared with `role = admin` in their route entries, but the
+  entries never applied the check, so any signed-in user could reach them. Each route
+  now has the `admin_only!()` layer. Test: `crates/tpt-home-plugins/tests/admin_smoke.rs`.
+- **Plugin host services accepted any signed-in caller.** `POST /api/plugin-host/<id>/...`
+  ran for a browser session and for general API tokens. It now requires a token scoped
+  to `plugin:<id>`, as the plugin guide says. Test: `crates/tpt-home-plugins/tests/host_api.rs`.

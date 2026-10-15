@@ -89,3 +89,28 @@ confirmed. The cause on this machine is not known.
 - **Writes under load.** The load is reads. Concurrent writes to notes, track
   and plugin tables were not measured.
 - **Allocator.** The Phase 8 allocator choice has not been evaluated.
+
+## Allocator: system heap vs mimalloc (2026-10-15)
+
+Same machine, same release settings (fat LTO), same command:
+`scripts/load.ps1 -Requests 20000 -Concurrency 32 -RotateClients`. Only the global
+allocator differs: `mimalloc` (MIT) in `tpt-home-cli`.
+
+| Measure | System heap | mimalloc |
+|---|---|---|
+| Requests per second | 704 | 946 |
+| p50 | 41 ms | 32 ms |
+| p95 | 64 ms | 53 ms |
+| p99 | 98 ms | 67 ms |
+| Slowest request | 3,322 ms | 1,293 ms |
+| Working set after the run | 20.9 MB | 29.4 MB |
+| Idle working set (bench) | 12.1 MB | 13.1 MB |
+| Binary | 24.99 MB | 24.98 MB |
+
+Throughput and latency improved. The price is memory: mimalloc holds more after
+a burst (about 8 MB more here) and about 1 MB more at idle. Both figures stay under
+the idle target of 30 MB. The "RAM before" figure in the load run read 33 MB with
+mimalloc against 13 MB before; that number is not explained yet, so treat it with
+care. Startup measured 158 ms on a warm run; an earlier cold run read 751 ms.
+
+The binary is 24.98 MB against the 25 MB limit, so there is almost no room left.

@@ -22,13 +22,13 @@ pub fn render(user: &AuthUser) -> Html<String> {
 
 const BODY: &str = r##"
 <div class="card">
-  <h2 style="margin-top:0">Upload a file</h2>
+  <h2 class="mt0">Upload a file</h2>
   <input id="file" type="file">
-  <div class="row" style="margin-top:8px"><button data-click="upload">Upload</button></div>
+  <div class="row mt8"><button data-click="upload">Upload</button></div>
   <div id="msg"></div>
 </div>
 <div class="card">
-  <h2 style="margin-top:0">Files</h2>
+  <h2 class="mt0">Files</h2>
   <div id="list"><p class="muted">Loading…</p></div>
 </div>
 <script>

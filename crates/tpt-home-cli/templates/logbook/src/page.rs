@@ -22,7 +22,7 @@ pub fn render(user: &AuthUser) -> Html<String> {
 
 const BODY: &str = r##"
 <div class="card">
-  <div class="row" style="gap:24px">
+  <div class="row s-gap-24px">
     <div><div class="muted">Entries</div><strong id="s-count">–</strong></div>
     <div><div class="muted">Total</div><strong id="s-total">–</strong></div>
     <div><div class="muted">Average</div><strong id="s-average">–</strong></div>
@@ -30,20 +30,20 @@ const BODY: &str = r##"
   </div>
 </div>
 <div class="card">
-  <h2 style="margin-top:0">Add an entry</h2>
+  <h2 class="mt0">Add an entry</h2>
   <label for="day">Date</label>
-  <input id="day" type="date" style="max-width:220px">
+  <input id="day" type="date" class="s-max-width-220px">
   <label for="label">Label</label>
   <input id="label" maxlength="100" placeholder="e.g. Electricity meter">
   <label for="value">Value</label>
-  <input id="value" type="number" step="any" style="max-width:220px">
+  <input id="value" type="number" step="any" class="s-max-width-220px">
   <label for="notes">Notes</label>
   <textarea id="notes" rows="2" maxlength="2000" placeholder="Optional"></textarea>
-  <div class="row" style="margin-top:8px"><button data-click="addEntry">Add</button></div>
+  <div class="row mt8"><button data-click="addEntry">Add</button></div>
   <div id="msg"></div>
 </div>
 <div class="card">
-  <h2 style="margin-top:0">Entries</h2>
+  <h2 class="mt0">Entries</h2>
   <div id="list"><p class="muted">Loading…</p></div>
 </div>
 <script>

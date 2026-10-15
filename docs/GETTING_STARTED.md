@@ -38,6 +38,8 @@ developer.
    you name the server and add family members. See
    [FAMILY_SIGN_IN.md](FAMILY_SIGN_IN.md) for adding people.
 
+![The welcome page: name the server, add family, connect, apps](screenshots/welcome.png)
+
 ## 3. Use it from a phone
 
 By default the server answers only this computer. To use it from a phone:
@@ -55,12 +57,20 @@ outside the house, read [REMOTE_ACCESS.md](REMOTE_ACCESS.md).
   `backup_every_hours` in `config.toml`. Keep a copy somewhere else as well.
 - **Keep the password.** A password that an admin set must be changed on first use;
   that is deliberate.
+- **Remote access** is checked on **Admin · Remote access**. Nothing changes there
+  until you run a command on the server, as the page explains.
+
+![Admin · Remote access: live checks and the steps left](screenshots/admin-remote.png)
+
 - **Watch the status page.** **Admin · Status** shows the version, disk space, the
   last backup and any failing scheduled jobs.
 
 ## 5. Apps (plugins)
 
-Apps are installed from a package file (`.tptp`) in **Admin · Plugins**:
+![The Admin · Plugins page: install, enable, remove](screenshots/admin-plugins.png)
+
+Apps are installed from a package file (`.tptp`) in **Admin · Plugins**, or picked
+from the catalog on the same page when the server has a catalog address:
 
 1. Choose the package. If the publisher sent a signature file (`.sig`), choose that
    too.

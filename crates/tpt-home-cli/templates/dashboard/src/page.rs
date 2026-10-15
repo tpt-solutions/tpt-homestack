@@ -22,19 +22,19 @@ pub fn render(user: &AuthUser) -> Html<String> {
 
 const BODY: &str = r##"
 <div class="card">
-  <h2 style="margin-top:0">Record a reading</h2>
-  <div class="row" style="gap:8px;flex-wrap:wrap">
-    <input id="metric" maxlength="50" placeholder="metric, e.g. power_kwh" style="max-width:240px">
-    <input id="value" type="number" step="any" placeholder="value" style="max-width:160px">
+  <h2 class="mt0">Record a reading</h2>
+  <div class="row s-gap-8px-flex-wrap-wrap">
+    <input id="metric" maxlength="50" placeholder="metric, e.g. power_kwh" class="s-max-width-240px">
+    <input id="value" type="number" step="any" placeholder="value" class="s-max-width-160px">
     <button data-click="record">Record</button>
   </div>
   <div id="msg"></div>
 </div>
-<div id="cards" style="display:flex;flex-wrap:wrap;gap:16px">
+<div id="cards" class="s-display-flex-flex-wrap-wrap-gap-16px">
   <p class="muted">Loading…</p>
 </div>
-<div class="card" style="margin-top:16px">
-  <h2 style="margin-top:0">Latest readings</h2>
+<div class="card s-margin-top-16px">
+  <h2 class="mt0">Latest readings</h2>
   <div id="recent"><p class="muted">Loading…</p></div>
 </div>
 <script>
@@ -54,9 +54,9 @@ async function load() {
     document.getElementById('cards').innerHTML = cards.length === 0
       ? '<p class="muted">No metrics yet. Record a reading to start a card.</p>'
       : cards.map(c =>
-          '<div class="card" style="flex:1 1 220px;max-width:300px;margin:0">' +
+          '<div class="card s-flex-1-1-220px-max-width-300px-margin-0">' +
             '<div class="muted">' + esc(c.metric) + '</div>' +
-            '<div style="font-size:2em;font-weight:600">' + fmt(c.latest) + '</div>' +
+            '<div class="s-font-size-2em-font-weight-600">' + fmt(c.latest) + '</div>' +
             '<div class="muted">7-day average ' + fmt(c.avg_7d) + '</div>' +
             '<div class="muted">' + Number(c.count) + ' readings · last ' + esc(when(c.latest_at)) + '</div>' +
           '</div>'

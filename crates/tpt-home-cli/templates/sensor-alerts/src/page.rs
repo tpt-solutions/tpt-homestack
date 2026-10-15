@@ -29,19 +29,19 @@ pub fn render(user: &AuthUser) -> Html<String> {
 /// Admin-only card: create the webhook, then choose it as the feed and set the rules.
 const SETUP: &str = r##"
 <div class="card">
-  <h2 style="margin-top:0">Setup</h2>
+  <h2 class="mt0">Setup</h2>
   <p class="muted">1. Create the webhook that sensors will post to. The secret is shown once; store it in the sender.</p>
-  <div class="row" style="gap:8px;flex-wrap:wrap">
-    <input id="hook-name" maxlength="50" placeholder="webhook name, e.g. house-sensors" style="max-width:280px">
+  <div class="row s-gap-8px-flex-wrap-wrap">
+    <input id="hook-name" maxlength="50" placeholder="webhook name, e.g. house-sensors" class="s-max-width-280px">
     <button data-click="createHook">Create webhook</button>
   </div>
   <div id="hook-result"></div>
-  <p class="muted" style="margin-top:12px">2. Choose the webhook as the feed and set the rules. Quiet hours are in the server's time zone; the server's clock is <span id="server-clock">…</span>.</p>
-  <div class="row" style="gap:8px;flex-wrap:wrap">
-    <label>Feed <input id="feed" maxlength="50" style="max-width:220px"></label>
-    <label>Quiet from (hour) <input id="qfrom" type="number" min="0" max="23" style="max-width:90px"></label>
-    <label>to (hour) <input id="qto" type="number" min="0" max="23" style="max-width:90px"></label>
-    <label>Silent after (hours) <input id="silent" type="number" min="1" max="720" style="max-width:110px"></label>
+  <p class="muted s-margin-top-12px">2. Choose the webhook as the feed and set the rules. Quiet hours are in the server's time zone; the server's clock is <span id="server-clock">…</span>.</p>
+  <div class="row s-gap-8px-flex-wrap-wrap">
+    <label>Feed <input id="feed" maxlength="50" class="s-max-width-220px"></label>
+    <label>Quiet from (hour) <input id="qfrom" type="number" min="0" max="23" class="s-max-width-90px"></label>
+    <label>to (hour) <input id="qto" type="number" min="0" max="23" class="s-max-width-90px"></label>
+    <label>Silent after (hours) <input id="silent" type="number" min="1" max="720" class="s-max-width-110px"></label>
     <button data-click="saveSettings">Save</button>
   </div>
   <div id="settings-msg"></div>
@@ -52,11 +52,11 @@ const BODY: &str = r##"
 <div id="msg"></div>
 <div class="grid">
   <div class="card">
-    <h2 style="margin-top:0">Sensors</h2>
+    <h2 class="mt0">Sensors</h2>
     <div id="sensors"><p class="muted">Loading…</p></div>
   </div>
   <div class="card">
-    <h2 style="margin-top:0">Sending events</h2>
+    <h2 class="mt0">Sending events</h2>
     <p class="muted">POST JSON to <code>/api/hooks/&lt;webhook name&gt;</code> with headers <code>X-Tpt-Timestamp</code> (Unix seconds) and <code>X-Tpt-Signature</code> (hex HMAC-SHA256 of <code>&lt;timestamp&gt;.&lt;body&gt;</code>, keyed with the secret).</p>
 <pre>import hmac, hashlib, json, time, urllib.request
 body = json.dumps({"sensor": "front-door", "state": "open"}).encode()
@@ -68,8 +68,8 @@ req = urllib.request.Request(URL, data=body, headers={
 urllib.request.urlopen(req)</pre>
   </div>
 </div>
-<div class="card" style="margin-top:16px">
-  <h2 style="margin-top:0">Alerts</h2>
+<div class="card s-margin-top-16px">
+  <h2 class="mt0">Alerts</h2>
   <div id="alerts"><p class="muted">Loading…</p></div>
 </div>
 <script>

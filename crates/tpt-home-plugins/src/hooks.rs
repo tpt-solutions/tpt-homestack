@@ -61,7 +61,7 @@ inventory::submit! {
         register: |router| {
             router.route(
                 "/api/plugins/{plugin_id}/hooks/{name}/secret",
-                axum::routing::post(rotate_secret),
+                axum::routing::post(rotate_secret).layer(tpt_home_core::admin_only!()),
             )
         },
     }

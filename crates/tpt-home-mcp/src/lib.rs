@@ -48,6 +48,9 @@ const PARSE_ERROR: i64 = -32700;
 pub struct Caller {
     pub user: AuthUser,
     pub scopes: Vec<String>,
+    /// Credential headers (`authorization` or `cookie`) that blueprint tools
+    /// send along when they call the server, so the same checks apply.
+    pub forward: Vec<(String, String)>,
 }
 
 impl From<ResolvedToken> for Caller {
@@ -55,6 +58,7 @@ impl From<ResolvedToken> for Caller {
         Self {
             user: token.user,
             scopes: token.scopes,
+            forward: Vec::new(),
         }
     }
 }
@@ -68,6 +72,11 @@ enum Target {
     FormAction {
         plugin: String,
         action: String,
+    },
+    /// A blueprint tool: `method` on `path`, with `{placeholders}` from the arguments.
+    Route {
+        method: String,
+        path: String,
     },
 }
 
@@ -166,7 +175,133 @@ fn tools_for(caller: &Caller) -> Vec<Tool> {
             });
         }
     }
+    for entry in tpt_home_core::inventory::iter::<tpt_home_core::McpToolEntry>() {
+        if entry.role == Some("admin") && !caller.user.is_admin() {
+            continue;
+        }
+        let prefix = entry.path.split('{').next().unwrap_or(entry.path);
+        if !scope_allows(&caller.scopes, prefix) {
+            continue;
+        }
+        let Ok(schema) = serde_json::from_str::<Value>(entry.input_schema) else {
+            continue;
+        };
+        tools.push(Tool {
+            name: entry.name.to_string(),
+            description: entry.description.to_string(),
+            input_schema: schema,
+            target: Target::Route {
+                method: entry.method.to_string(),
+                path: entry.path.to_string(),
+            },
+        });
+    }
     tools
+}
+
+/// Percent-encode everything but unreserved characters.
+fn percent_encode(text: &str) -> String {
+    text.bytes()
+        .map(|b| {
+            if b.is_ascii_alphanumeric() || matches!(b, b'-' | b'.' | b'_' | b'~') {
+                (b as char).to_string()
+            } else {
+                format!("%{b:02X}")
+            }
+        })
+        .collect()
+}
+
+/// Text for an argument that can go in a path or query: strings, numbers, booleans.
+fn scalar_text(value: &Value) -> Option<String> {
+    match value {
+        Value::String(s) => Some(s.clone()),
+        Value::Number(n) => Some(n.to_string()),
+        Value::Bool(b) => Some(b.to_string()),
+        _ => None,
+    }
+}
+
+/// Fill `{name}` placeholders in a route template from the arguments. Returns
+/// the path and the names it used.
+fn fill_path(template: &str, args: &Value) -> Result<(String, Vec<String>), String> {
+    let mut out = String::new();
+    let mut used = Vec::new();
+    let mut rest = template;
+    while let Some(open) = rest.find('{') {
+        let close = rest[open..].find('}').ok_or("malformed route template")? + open;
+        out.push_str(&rest[..open]);
+        let key = &rest[open + 1..close];
+        let value = args
+            .get(key)
+            .and_then(scalar_text)
+            .ok_or_else(|| format!("argument '{key}' is required"))?;
+        out.push_str(&percent_encode(&value));
+        used.push(key.to_string());
+        rest = &rest[close + 1..];
+    }
+    out.push_str(rest);
+    Ok((out, used))
+}
+
+/// A blueprint tool call. Path placeholders come from the arguments; the rest
+/// go in the query string (GET, DELETE) or the JSON body (other methods). The
+/// server is called over loopback with the caller's credential, so its own
+/// checks decide the outcome.
+async fn route_call(
+    caller: &Caller,
+    method: &str,
+    template: &str,
+    args: &Value,
+) -> Result<Value, String> {
+    let (path, used) = fill_path(template, args)?;
+    if !scope_allows(&caller.scopes, &path) {
+        return Err("token scope does not allow this route".into());
+    }
+    let remaining: serde_json::Map<String, Value> = args
+        .as_object()
+        .map(|object| {
+            object
+                .iter()
+                .filter(|(key, _)| !used.contains(key))
+                .map(|(key, value)| (key.clone(), value.clone()))
+                .collect()
+        })
+        .unwrap_or_default();
+    let port = tpt_home_core::config::try_global()
+        .map(|c| c.port)
+        .ok_or("the server configuration is not loaded")?;
+    let mut url = format!("http://127.0.0.1:{port}{path}");
+    let body = if matches!(method, "GET" | "DELETE") {
+        let query: Vec<String> = remaining
+            .iter()
+            .filter_map(|(key, value)| {
+                scalar_text(value)
+                    .map(|text| format!("{}={}", percent_encode(key), percent_encode(&text)))
+            })
+            .collect();
+        if !query.is_empty() {
+            url.push('?');
+            url.push_str(&query.join("&"));
+        }
+        None
+    } else if remaining.is_empty() {
+        None
+    } else {
+        Some(Value::Object(remaining).to_string())
+    };
+    let headers = caller.forward.clone();
+    let method = method.to_string();
+    let (status, text) = tokio::task::spawn_blocking(move || {
+        tpt_home_core::fetch::loopback_call(&method, &url, &headers, body.as_deref())
+    })
+    .await
+    .map_err(|e| e.to_string())??;
+    Ok(json!({
+        "content": [{ "type": "text", "text": format!("HTTP {status}\n{text}") }],
+        "structuredContent": { "status": status, "body": text },
+        "isError": status >= 400,
+    }))
 }
 
 fn rpc_error(id: &Value, code: i64, message: &str) -> Value {
@@ -251,6 +386,7 @@ async fn call_tool(caller: &Caller, params: &Value) -> Result<Value, (i64, Strin
     let outcome = match tool.target {
         Target::ListPlugins => Ok(list_plugins(caller)),
         Target::PluginCall => plugin_call(caller, &arguments).await,
+        Target::Route { method, path } => route_call(caller, &method, &path, &arguments).await,
         Target::FormAction { plugin, action } => {
             let path = format!("/api/{plugin}/{action}");
             if !scope_allows(&caller.scopes, &path) {
@@ -394,13 +530,25 @@ inventory::submit! {
 async fn http_endpoint(
     Extension(user): Extension<AuthUser>,
     scopes: Option<Extension<TokenScopes>>,
+    headers: axum::http::HeaderMap,
     body: Bytes,
 ) -> Response {
+    // Forward whichever credential the caller used, so blueprint tools act as them.
+    let forward = ["authorization", "cookie"]
+        .iter()
+        .filter_map(|name| {
+            headers
+                .get(*name)
+                .and_then(|v| v.to_str().ok())
+                .map(|v| (name.to_string(), v.to_string()))
+        })
+        .collect();
     let caller = Caller {
         user,
         scopes: scopes
             .map(|s| s.0.0)
             .unwrap_or_else(|| vec!["api".to_string()]),
+        forward,
     };
     let message: Value = match serde_json::from_slice(&body) {
         Ok(message) => message,
@@ -464,8 +612,10 @@ pub async fn run_stdio(caller: Caller) -> std::io::Result<()> {
 
 /// Resolve a bearer token into a stdio caller. Used by `tpt-home mcp`.
 pub async fn caller_for_token(db: &DbPool, token: &str) -> Result<Caller, anyhow::Error> {
-    tpt_home_core::auth::api_token::resolve_api_token(db, token)
+    let mut caller = tpt_home_core::auth::api_token::resolve_api_token(db, token)
         .await?
         .map(Caller::from)
-        .ok_or_else(|| anyhow::anyhow!("token is unknown, expired or revoked"))
+        .ok_or_else(|| anyhow::anyhow!("token is unknown, expired or revoked"))?;
+    caller.forward = vec![("authorization".to_string(), format!("Bearer {token}"))];
+    Ok(caller)
 }

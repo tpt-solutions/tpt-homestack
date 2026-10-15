@@ -172,7 +172,7 @@ const MAX_HTML_BYTES: usize = 8 * 1024 * 1024;
 
 /// Policy for responses that carry no page script. Scripts must come from this
 /// origin; inline scripts and inline event handlers are refused.
-const STATIC_CSP: &str = "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; \
+const STATIC_CSP: &str = "default-src 'self'; script-src 'self'; style-src 'self'; \
      img-src 'self' data:; object-src 'none'; base-uri 'self'; form-action 'self'; \
      frame-ancestors 'none'";
 
@@ -180,8 +180,9 @@ const STATIC_CSP: &str = "default-src 'self'; script-src 'self'; style-src 'self
 /// `<script>` tags carry it, and the policy allows only those scripts, so
 /// inline script injected into a page does not run.
 ///
-/// Styles still allow `'unsafe-inline'`: the pages use `style=` attributes.
-/// Removing that needs the same treatment and is not done yet.
+/// Styles get the same treatment: the shell's `<style>` element carries the
+/// nonce, and there are no `style=` attributes, so `'unsafe-inline'` is not
+/// allowed for styles either.
 pub async fn security_headers(req: Request, next: Next) -> Response {
     let nonce = uuid::Uuid::new_v4().simple().to_string();
     let res = next.run(req).await;
@@ -202,14 +203,15 @@ pub async fn security_headers(req: Request, next: Next) -> Response {
                 Ok(text) => {
                     csp = format!(
                         "default-src 'self'; script-src 'self' 'nonce-{nonce}'; \
-                         style-src 'self' 'unsafe-inline'; img-src 'self' data:; \
+                         style-src 'self' 'nonce-{nonce}'; img-src 'self' data:; \
                          object-src 'none'; base-uri 'self'; form-action 'self'; \
                          frame-ancestors 'none'"
                     );
                     // The length changes with the nonce, so the old header goes.
                     parts.headers.remove(header::CONTENT_LENGTH);
                     axum::body::Body::from(
-                        text.replace("<script>", &format!("<script nonce=\"{nonce}\">")),
+                        text.replace("<script>", &format!("<script nonce=\"{nonce}\">"))
+                            .replace("<style>", &format!("<style nonce=\"{nonce}\">")),
                     )
                 }
                 Err(_) => axum::body::Body::from(bytes),
@@ -529,4 +531,18 @@ mod https_tests {
         assert!(https_location("ok.example", "no-slash").is_none());
         assert!(https_location("ok.example", "/a b").is_none());
     }
+}
+
+/// A route layer that admits only admins. Use it on hand-written
+/// `RouteEntry` registrations: `router.route(path, get(h).layer(admin_only!()))`.
+/// The `#[bp_route(..., role = "admin")]` macro applies the same guard itself.
+#[macro_export]
+macro_rules! admin_only {
+    () => {
+        axum::middleware::from_fn(
+            |req: axum::extract::Request, next: axum::middleware::Next| {
+                $crate::middleware::role_guard(req, next, "admin")
+            },
+        )
+    };
 }

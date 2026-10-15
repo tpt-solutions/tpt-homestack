@@ -521,3 +521,22 @@ pub fn stage_package(archive: &[u8]) -> Result<(PathBuf, PluginManifest), anyhow
     };
     Ok((staging, manifest))
 }
+
+inventory::submit! {
+    tpt_home_core::MigrationEntry {
+        key: "tpt-home-plugins:005_email_settings",
+        sql: r#"
+            CREATE TABLE IF NOT EXISTS email_settings (
+                id          INTEGER PRIMARY KEY CHECK (id = 1),
+                host        TEXT    NOT NULL,
+                port        INTEGER NOT NULL,
+                security    TEXT    NOT NULL,
+                username    TEXT    NOT NULL DEFAULT '',
+                password    TEXT    NOT NULL DEFAULT '',
+                from_addr   TEXT    NOT NULL,
+                to_addr     TEXT    NOT NULL,
+                updated_at  INTEGER NOT NULL
+            );
+        "#,
+    }
+}

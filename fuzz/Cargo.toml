@@ -1,0 +1,59 @@
+# Coverage-guided fuzz targets for the parsers that read untrusted input.
+# Not part of the main workspace: it needs a nightly toolchain and cargo-fuzz.
+#
+#   cargo install cargo-fuzz
+#   cargo +nightly fuzz run manifest -- -max_total_time=60
+#
+# See fuzz/README.md.
+
+[package]
+name = "tpt-home-fuzz"
+version = "0.0.0"
+publish = false
+edition = "2024"
+
+[package.metadata]
+cargo-fuzz = true
+
+[dependencies]
+libfuzzer-sys = "0.4"
+tempfile = "3"
+tpt-home-core = { path = "../crates/tpt-home-core" }
+tpt-home-plugins = { path = "../crates/tpt-home-plugins" }
+
+[[bin]]
+name = "manifest"
+path = "fuzz_targets/manifest.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "package"
+path = "fuzz_targets/package.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "catalog"
+path = "fuzz_targets/catalog.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "update"
+path = "fuzz_targets/update.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "webhook"
+path = "fuzz_targets/webhook.rs"
+test = false
+doc = false
+bench = false
+
+[workspace]

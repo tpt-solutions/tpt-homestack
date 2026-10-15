@@ -50,6 +50,68 @@ pub fn https_get(url: &str, max_bytes: u64) -> Result<Vec<u8>, String> {
     Ok(bytes)
 }
 
+/// Call the server itself over loopback, with the caller's credential headers.
+/// Only `http://127.0.0.1:` URLs are accepted. Returns the status and the body
+/// (at most 1 MiB). Blocking: call from `spawn_blocking`.
+pub fn loopback_call(
+    method: &str,
+    url: &str,
+    headers: &[(String, String)],
+    body: Option<&str>,
+) -> Result<(u16, String), String> {
+    if !url.starts_with("http://127.0.0.1:") {
+        return Err("loopback calls must use 127.0.0.1".into());
+    }
+    let config = ureq::Agent::config_builder()
+        .timeout_global(Some(Duration::from_secs(30)))
+        .max_redirects(0)
+        .http_status_as_error(false)
+        .build();
+    let agent = ureq::Agent::new_with_config(config);
+    let unreachable = |e: ureq::Error| format!("could not reach the server: {e}");
+    let mut response = match method {
+        "GET" | "DELETE" => {
+            let mut request = if method == "GET" {
+                agent.get(url)
+            } else {
+                agent.delete(url)
+            };
+            for (name, value) in headers {
+                request = request.header(name.as_str(), value.as_str());
+            }
+            // The server's CSRF guard wants a content type on every mutating
+            // request, DELETE included.
+            if method == "DELETE" {
+                request = request.header("content-type", "application/json");
+            }
+            request.call().map_err(unreachable)?
+        }
+        "POST" | "PUT" | "PATCH" => {
+            let mut request = match method {
+                "POST" => agent.post(url),
+                "PUT" => agent.put(url),
+                _ => agent.patch(url),
+            };
+            for (name, value) in headers {
+                request = request.header(name.as_str(), value.as_str());
+            }
+            request
+                .header("content-type", "application/json")
+                .send(body.unwrap_or("{}"))
+                .map_err(unreachable)?
+        }
+        other => return Err(format!("unsupported method '{other}'")),
+    };
+    let status = response.status().as_u16();
+    let text = response
+        .body_mut()
+        .with_config()
+        .limit(1024 * 1024)
+        .read_to_string()
+        .map_err(|e| format!("could not read the reply: {e}"))?;
+    Ok((status, text))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

@@ -122,18 +122,18 @@ pub async fn <NAME>_page(
 
 const PAGE_BODY: &str = r##"
 <div class="card">
-  <h2 style="margin-top:0">Add a record</h2>
+  <h2 class="mt0">Add a record</h2>
   <label for="title">Title</label>
   <input id="title" maxlength="200" placeholder="What is it?">
   <label for="notes">Notes</label>
   <textarea id="notes" rows="3" maxlength="5000" placeholder="Optional"></textarea>
-  <div class="row" style="margin-top:8px">
+  <div class="row mt8">
     <button data-click="addRecord">Add</button>
   </div>
   <div id="msg"></div>
 </div>
 <div class="card">
-  <h2 style="margin-top:0">Records</h2>
+  <h2 class="mt0">Records</h2>
   <div id="list"><p class="muted">Loading…</p></div>
 </div>
 <script>
@@ -156,7 +156,7 @@ async function load() {
       '<div class="card">' +
         '<div class="spread"><strong>' + esc(r.title) + '</strong>' +
         '<button class="secondary" data-click="removeRecord:' + Number(r.id) + '">Delete</button></div>' +
-        (r.notes ? '<p class="muted" style="white-space:pre-wrap">' + esc(r.notes) + '</p>' : '') +
+        (r.notes ? '<p class="muted s-white-space-pre-wrap">' + esc(r.notes) + '</p>' : '') +
       '</div>'
     ).join('');
   } catch (e) { showError(e); }

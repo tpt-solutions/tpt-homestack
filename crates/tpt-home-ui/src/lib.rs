@@ -90,6 +90,39 @@ pre.md { background:var(--bg); border:1px solid var(--line); border-radius:8px;
   .sidebar { width:auto; flex:none; border-right:0; border-bottom:1px solid var(--line); }
   .main { padding:16px; }
 }
+/* Utility classes. Pages use these instead of style attributes, so the
+   Content-Security-Policy can refuse inline styles. */
+.mt0 { margin-top:0; } .m0 { margin:0; } .mt6 { margin-top:6px; }
+.mt8 { margin-top:8px; } .mt14 { margin-top:14px; }
+.scroll-x { overflow-x:auto; } .span-all { grid-column:1/-1; }
+.w200 { max-width:200px; } .w420 { max-width:420px; } .w480 { max-width:480px; }
+.between { justify-content:space-between; }
+.form-grid { display:grid; gap:8px; max-width:520px; }
+.brand-line { font-weight:700; font-size:20px; margin-bottom:16px; }
+.big-number { font-size:28px; font-weight:600; margin-top:4px; }
+.health-grid { display:grid; grid-template-columns:repeat(auto-fit,minmax(160px,1fr)); gap:14px; }
+.cards-grid { display:grid; grid-template-columns:repeat(auto-fit,minmax(160px,1fr)); gap:12px; }
+.label-block { display:block; margin:8px 0; }
+.s-max-width-340px { max-width:340px; }
+.s-display-none { display:none; }
+.s-margin-top-12px { margin-top:12px; }
+.s-max-width-280px { max-width:280px; }
+.s-max-width-140px { max-width:140px; }
+.s-margin-top-10px { margin-top:10px; }
+.s-max-width-170px { max-width:170px; }
+.s-gap-8px-flex-wrap-wrap { gap:8px;flex-wrap:wrap; }
+.s-max-width-240px { max-width:240px; }
+.s-max-width-160px { max-width:160px; }
+.s-display-flex-flex-wrap-wrap-gap-16px { display:flex;flex-wrap:wrap;gap:16px; }
+.s-margin-top-16px { margin-top:16px; }
+.s-flex-1-1-220px-max-width-300px-margin-0 { flex:1 1 220px;max-width:300px;margin:0; }
+.s-font-size-2em-font-weight-600 { font-size:2em;font-weight:600; }
+.s-gap-24px { gap:24px; }
+.s-max-width-220px { max-width:220px; }
+.s-white-space-pre-wrap { white-space:pre-wrap; }
+.s-white-space-pre-wrap-max-height-8em-overflow-auto { white-space:pre-wrap;max-height:8em;overflow:auto; }
+.s-max-width-90px { max-width:90px; }
+.s-max-width-110px { max-width:110px; }
 "#;
 
 /// Event delegation for every page. Elements name their handler in
@@ -189,7 +222,7 @@ pub fn page(
 /// Standalone (no-shell) page used for login and first-run setup.
 pub fn bare_page(title: &str, body: &str) -> String {
     format!(
-        "{}\n<div class=\"center\">\n<div class=\"brand\" style=\"font-weight:700;font-size:20px;margin-bottom:16px\">tpt-homestack</div>\n{}\n</div>\n<script>{DISPATCH_JS}</script>\n</body>\n</html>",
+        "{}\n<div class=\"center\">\n<div class=\"brand brand-line\">tpt-homestack</div>\n{}\n</div>\n<script>{DISPATCH_JS}</script>\n</body>\n</html>",
         shell_open(title),
         body
     )
@@ -201,11 +234,11 @@ pub fn login_page(error: Option<&str>) -> String {
         .map(|e| format!("<div class=\"msg error\">{}</div>", esc(e)))
         .unwrap_or_default();
     let body = format!(
-        "<div class=\"card\">\n{err}\n<h1 style=\"margin-top:0\">Sign in</h1>\n\
+        "<div class=\"card\">\n{err}\n<h1 class=\"mt0\">Sign in</h1>\n\
          <form data-submit=\"doLogin\">\n\
          <label for=\"u\">Username</label><input id=\"u\" autocomplete=\"username\" required>\n\
          <label for=\"p\">Password</label><input id=\"p\" type=\"password\" autocomplete=\"current-password\" required>\n\
-         <div style=\"margin-top:14px\"><button type=\"submit\">Sign in</button></div>\n</form>\n</div>\n\
+         <div class=\"mt14\"><button type=\"submit\">Sign in</button></div>\n</form>\n</div>\n\
          <script>\nasync function doLogin(ev) {{\n  ev.preventDefault();\n  try {{\n    await postJson('/api/auth/login', {{username: document.getElementById('u').value, password: document.getElementById('p').value}});\n    location.href = '/dashboard';\n  }} catch (e) {{ location.href = '/login?error=' + encodeURIComponent(e.message); }}\n  return false;\n}}\n</script>"
     );
     bare_page("Sign in", &body)
@@ -217,12 +250,12 @@ pub fn setup_page(error: Option<&str>) -> String {
         .map(|e| format!("<div class=\"msg error\">{}</div>", esc(e)))
         .unwrap_or_default();
     let body = format!(
-        "<div class=\"card\">\n{err}\n<h1 style=\"margin-top:0\">Welcome</h1>\n\
+        "<div class=\"card\">\n{err}\n<h1 class=\"mt0\">Welcome</h1>\n\
          <p class=\"muted\">This instance has no users yet. Create the first admin account.</p>\n\
          <form data-submit=\"doSetup\">\n\
          <label for=\"u\">Admin username</label><input id=\"u\" autocomplete=\"username\" required>\n\
          <label for=\"p\">Password (min 8 chars)</label><input id=\"p\" type=\"password\" autocomplete=\"new-password\" required>\n\
-         <div style=\"margin-top:14px\"><button type=\"submit\">Create admin</button></div>\n</form>\n</div>\n\
+         <div class=\"mt14\"><button type=\"submit\">Create admin</button></div>\n</form>\n</div>\n\
          <script>\nasync function doSetup(ev) {{\n  ev.preventDefault();\n  try {{\n    await postJson('/api/setup', {{username: document.getElementById('u').value, password: document.getElementById('p').value}});\n    location.href = '/dashboard';\n  }} catch (e) {{ location.href = '/setup?error=' + encodeURIComponent(e.message); }}\n  return false;\n}}\n</script>"
     );
     bare_page("Setup", &body)
@@ -254,13 +287,13 @@ pub fn settings_content() -> String {
     // A plain literal, not a format string: braces here are real JavaScript.
     // The script must use only what this page defines (`fetch`), and it shows
     // server messages as text, not HTML.
-    r#"<div class="card" style="max-width:420px">
-<h2 style="margin-top:0">Change password</h2>
+    r#"<div class="card w420">
+<h2 class="mt0">Change password</h2>
 <form data-submit="doPwChange">
 <label for="cur">Current password</label><input id="cur" type="password" autocomplete="current-password" required>
 <label for="new">New password (min 8 chars)</label><input id="new" type="password" autocomplete="new-password" required>
 <div id="pwmsg"></div>
-<div style="margin-top:14px"><button type="submit">Update password</button></div>
+<div class="mt14"><button type="submit">Update password</button></div>
 </form>
 </div>
 <script>
@@ -355,10 +388,10 @@ pub fn users_admin_content(users: &[UserRow]) -> String {
         })
         .collect();
     format!(
-        "<div class=\"card\">\n<h2 style=\"margin-top:0\">Create user</h2>\n\
+        "<div class=\"card\">\n<h2 class=\"mt0\">Create user</h2>\n\
          <form data-submit=\"doCreate\">\n\
-         <div class=\"row\"><input id=\"nu\" placeholder=\"username\" style=\"max-width:200px\" required>\n\
-         <input id=\"np\" type=\"password\" placeholder=\"password\" style=\"max-width:200px\" required>\n\
+         <div class=\"row\"><input id=\"nu\" placeholder=\"username\" required class=\"w200\">\n\
+         <input id=\"np\" type=\"password\" placeholder=\"password\" required class=\"w200\">\n\
          <select id=\"nr\"><option value=\"user\">user</option><option value=\"admin\">admin</option></select>\n\
          <button type=\"submit\">Create</button></div>\n</form>\n</div>\n\
          <div class=\"card\">\n<table>\n<thead><tr><th>#</th><th>User</th><th>Status</th><th>Role</th><th>Actions</th></tr></thead>\n\
@@ -415,7 +448,7 @@ pub fn plugins_admin_content() -> String {
         .collect();
     let labels = serde_json::Value::Object(labels);
     format!(
-        "<div class=\"card\">\n<h2 style=\"margin-top:0\">Install a plugin</h2>\n\
+        "<div class=\"card\">\n<h2 class=\"mt0\">Install a plugin</h2>\n\
          <form data-submit=\"installPlugin\">\n\
          <p>Choose a <code>.tptp</code> package. Only the ticked abilities are granted; the plugin is refused anything else.</p>\n\
          <input id=\"pkg\" type=\"file\" accept=\".tptp\" required>\n\
@@ -426,7 +459,7 @@ pub fn plugins_admin_content() -> String {
          <button type=\"submit\">Install</button>\n</form>\n</div>\n\
          <div class=\"card\">\n<table>\n<thead><tr><th>Plugin</th><th>Status</th><th>Allowed to</th><th>Actions</th></tr></thead>\n\
          <tbody id=\"plugins\"><tr><td colspan=\"4\">Loading…</td></tr></tbody>\n</table>\n</div>\n\
-         <div class=\"card\">\n<div class=\"row\" style=\"justify-content:space-between\"><h2 style=\"margin:0\">Plugin catalog</h2>\
+         <div class=\"card\">\n<div class=\"row between\"><h2 class=\"m0\">Plugin catalog</h2>\
          <button class=\"secondary\" data-click=\"loadCatalog\">Load catalog</button></div>\n\
          <p class=\"muted\">Plugins listed by the catalog address in config.toml. Each one is downloaded, checksum-checked and signature-checked before you approve it.</p>\n\
          <div id=\"catalog\"></div>\n</div>\n\
@@ -525,12 +558,12 @@ pub fn plugins_admin_content() -> String {
 /// `GET /api/admin/remote`; config changes are shown as commands to run on the
 /// server, since they ask for confirmation there.
 pub fn remote_admin_content() -> String {
-    "<div class=\"card\">\n<div class=\"row\" style=\"justify-content:space-between\">\
-     <h2 style=\"margin:0\">Connect from anywhere</h2>\
+    "<div class=\"card\">\n<div class=\"row between\">\
+     <h2 class=\"m0\">Connect from anywhere</h2>\
      <button class=\"secondary\" data-click=\"loadRemote\">Check again</button></div>\n\
      <p class=\"muted\">These checks only look; nothing on this computer changes until you run a command below on the server.</p>\n\
      <div id=\"remote-config\"></div>\n</div>\n\
-     <div class=\"card\"><h2 style=\"margin-top:0\">Steps</h2><div id=\"remote-steps\">Checking…</div></div>\n\
+     <div class=\"card\"><h2 class=\"mt0\">Steps</h2><div id=\"remote-steps\">Checking…</div></div>\n\
      <script>\n\
      const escRemote = (s) => String(s).replace(/[&<>\"']/g, (c) => ({'&':'&amp;','<':'&lt;','>':'&gt;','\"':'&quot;',\"'\":'&#39;'})[c]);\n\
      const STAGE_LABEL = {done: 'Done', todo: 'To do', blocked: 'Install first'};\n\
@@ -545,7 +578,9 @@ pub fn remote_admin_content() -> String {
          cfgBox.innerHTML = '<p>Server: <code>' + escRemote(c.host) + ':' + escRemote(c.port) + '</code>, secure cookies ' +\n\
            (c.secure_cookies ? 'on' : 'off') + ', trust proxy ' + (c.trust_proxy ? 'on' : 'off') + '.</p>' +\n\
            (c.exposed ? '<p class=\"badge warn\">Exposed to the network</p>' : '') +\n\
-           '<p>Tailscale: ' + escRemote(j.tailscale) + '</p>';\n\
+           '<p>Tailscale: ' + escRemote(j.tailscale) + '</p>' +\n\
+           (j.probe ? '<p>' + (j.probe.reachable ? '<span class=\"badge\">Answers</span> ' : '<span class=\"badge warn\">Not answering</span> ') +\n\
+             '<code>' + escRemote(j.probe.url) + '</code>' + (j.probe.error ? ' — ' + escRemote(j.probe.error) : '') + '</p>' : '');\n\
          stepBox.innerHTML = '<ol>' + j.steps.map((s) =>\n\
            '<li><span class=\"badge' + (s.stage === 'done' ? '' : (s.stage === 'blocked' ? ' warn' : '')) + '\">' +\n\
            STAGE_LABEL[s.stage] + '</span> <strong>' + escRemote(s.provider) + '</strong>: ' + escRemote(s.text) +\n\
@@ -579,7 +614,7 @@ pub fn phone_link_card(url: &str, qr: Option<&str>) -> String {
         .map(|svg| format!("<div class=\"qr\">{svg}</div>\n"))
         .unwrap_or_default();
     format!(
-        "<div class=\"card\">\n<h2 style=\"margin-top:0\">Open on a phone or tablet</h2>\n\
+        "<div class=\"card\">\n<h2 class=\"mt0\">Open on a phone or tablet</h2>\n\
          <p>On the same Wi-Fi or network, open <a href=\"{url}\"><code>{url}</code></a>, or scan the code.</p>\n\
          {code}<p class=\"muted\">The name works where the device can resolve <code>.local</code> names: Windows 10 or later, Apple devices and most Linux desktops. Some Android phones need the server's IP address and port instead.</p>\n</div>",
         url = esc(url),
@@ -588,7 +623,7 @@ pub fn phone_link_card(url: &str, qr: Option<&str>) -> String {
 
 /// Settings card for a server that listens only on this computer.
 pub fn phone_link_unavailable_card() -> String {
-    "<div class=\"card\">\n<h2 style=\"margin-top:0\">Open on a phone or tablet</h2>\n\
+    "<div class=\"card\">\n<h2 class=\"mt0\">Open on a phone or tablet</h2>\n\
      <p>This server only accepts connections from this computer. To use it from other devices, set <code>host</code> to <code>0.0.0.0</code> in <code>config.toml</code> (or <code>TPT_HOME_HOST</code>) and restart.</p>\n</div>"
         .to_string()
 }
@@ -710,9 +745,9 @@ pub fn plugin_form_page(fields: &[String], action: &str) -> String {
         .collect();
     let field_names: Vec<String> = fields.iter().map(|f| format!("'{f}'")).collect();
     format!(
-        "<div class=\"card\" style=\"max-width:480px\">\n\
+        "<div class=\"card w480\">\n\
          <form data-submit=\"doSubmit\">\n{inputs}\n\
-         <div style=\"margin-top:14px\"><button type=\"submit\">Submit</button></div>\n</form>\n\
+         <div class=\"mt14\"><button type=\"submit\">Submit</button></div>\n</form>\n\
          <div id=\"pmsg\"></div>\n</div>\n\
          <script>\nasync function doSubmit(ev) {{\n  ev.preventDefault();\n  const body = {{}};\n  for (const f of [{}]) body[f] = document.getElementById('pf_' + f).value;\n  const r = await fetch('{action}', {{method:'POST', headers:{{'Content-Type':'application/json'}}, body: JSON.stringify(body)}});\n  const j = await r.json().catch(() => ({{}}));\n  const msg = document.getElementById('pmsg');\n  msg.innerHTML = r.ok ? '<div class=\"msg ok\">saved</div>' : '<div class=\"msg error\">' + (j.error || r.statusText) + '</div>';\n  return false;\n}}\n</script>",
         field_names.join(", ")
@@ -738,7 +773,7 @@ pub fn plugin_summary_page(metrics: &[MetricCard]) -> String {
         .map(|metric| match metric {
             MetricCard::Value { label, value } => format!(
                 "<div class=\"card\"><div class=\"muted\">{}</div>\
-                 <div style=\"font-size:28px;font-weight:600;margin-top:4px\">{}</div></div>",
+                 <div class=\"big-number\">{}</div></div>",
                 esc(label),
                 esc(value)
             ),
@@ -753,16 +788,14 @@ pub fn plugin_summary_page(metrics: &[MetricCard]) -> String {
                         .collect()
                 };
                 format!(
-                    "<div class=\"card\" style=\"grid-column:1/-1\"><div class=\"muted\">{}</div>\
-                     <table style=\"margin-top:8px\"><tbody>{body}</tbody></table></div>",
+                    "<div class=\"card span-all\"><div class=\"muted\">{}</div>\
+                     <table class=\"mt8\"><tbody>{body}</tbody></table></div>",
                     esc(label)
                 )
             }
         })
         .collect();
-    format!(
-        "<div style=\"display:grid;grid-template-columns:repeat(auto-fit,minmax(160px,1fr));gap:12px\">{cards}</div>"
-    )
+    format!("<div class=\"cards-grid\">{cards}</div>")
 }
 
 pub fn plugin_error_page(message: &str) -> String {
@@ -848,7 +881,7 @@ mod tests {
 /// The first-run wizard at `/welcome`. `server_name` and the user list are
 /// escaped here. The body is a plain string (its braces are JavaScript), with
 /// `__NAME__` and `__USERS__` filled in.
-pub fn welcome_content(server_name: &str, users: &[UserRow]) -> String {
+pub fn welcome_content(server_name: &str, users: &[UserRow], phone_html: &str) -> String {
     let list: String = users
         .iter()
         .map(|u| {
@@ -862,12 +895,13 @@ pub fn welcome_content(server_name: &str, users: &[UserRow]) -> String {
     WELCOME_BODY
         .replace("__NAME__", &esc(server_name))
         .replace("__USERS__", &list)
+        .replace("__PHONE__", phone_html)
 }
 
 const WELCOME_BODY: &str = r##"
 <p class="muted">Five minutes to set this up. Each step can be changed later from the Admin pages.</p>
 <div class="card">
-  <h2 style="margin-top:0">1. Name this server</h2>
+  <h2 class="mt0">1. Name this server</h2>
   <form>
     <div class="spread">
       <input id="sn" value="__NAME__" maxlength="64" required aria-label="Server name">
@@ -877,7 +911,7 @@ const WELCOME_BODY: &str = r##"
   <div id="sn-msg"></div>
 </div>
 <div class="card">
-  <h2 style="margin-top:0">2. Family accounts</h2>
+  <h2 class="mt0">2. Family accounts</h2>
   <p class="muted">Each person gets their own account and signs in with it.</p>
   <ul id="users">__USERS__</ul>
   <form>
@@ -889,14 +923,16 @@ const WELCOME_BODY: &str = r##"
     </div>
   </form>
   <div id="u-msg"></div>
+  __PHONE__
 </div>
 <div class="card">
-  <h2 style="margin-top:0">3. Connect from anywhere (optional)</h2>
+  <h2 class="mt0">3. Connect from anywhere (optional)</h2>
   <p class="muted"><a href="/admin/remote">Remote access</a> checks Tailscale, Cloudflare and Netbird on this computer and lists the steps still to do. Changing the settings is done with <code>tpt-home remote setup</code> on the server, which asks before it changes anything.</p>
 </div>
 <div class="card">
-  <h2 style="margin-top:0">4. Apps</h2>
+  <h2 class="mt0">4. Apps</h2>
   <p class="muted">If the server has a catalog address set (<code>catalog_url</code> in config.toml), <a href="/admin/plugins">Admin · Plugins</a> lists the apps it offers, and you approve each one before it is installed. The apps on the Dashboard are the ones this server has now.</p>
+  <div id="starter"><button type="button" class="secondary" data-click="loadStarter">Show starter apps</button></div>
   <button type="button" data-click="finish">Finish setup</button>
   <div id="f-msg"></div>
 </div>
@@ -910,6 +946,35 @@ async function call(url, method, body) {
 function note(id, text, ok) {
   document.getElementById(id).innerHTML = '<div class="msg ' + (ok ? 'ok' : 'error') + '"></div>';
   document.querySelector('#' + id + ' .msg').textContent = text;
+}
+let starterPlugins = [];
+const escW = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'})[c]);
+async function loadStarter() {
+  const box = document.getElementById('starter');
+  try {
+    const c = await call('/api/plugins/catalog', 'GET');
+    if (!c.configured) { box.innerHTML = '<p class="muted">No app catalog is set on this server (catalog_url in config.toml).</p>'; return false; }
+    starterPlugins = c.plugins.filter((p) => p.status === 'not installed');
+    if (!starterPlugins.length) { box.innerHTML = '<p class="muted">Every app in the catalog is already installed.</p>'; return false; }
+    box.innerHTML = starterPlugins.map((p, i) =>
+      '<label class="label-block"><input type="checkbox" id="st-' + i + '"> <strong>' + escW(p.name) + '</strong> ' + escW(p.description) +
+      '<br><span class="muted">Allowed to: ' + escW(p.permissions_plain.join('; ') || 'nothing') + '</span></label>'
+    ).join('') + '<button type="button" data-click="installStarter">Install selected</button><div id="st-msg"></div>';
+  } catch (e) { box.textContent = e.message; }
+  return false;
+}
+async function installStarter() {
+  const picked = starterPlugins.filter((p, i) => document.getElementById('st-' + i)?.checked);
+  if (!picked.length) { note('st-msg', 'Choose at least one app.', false); return false; }
+  let done = 0;
+  for (const p of picked) {
+    try {
+      await call('/api/plugins/catalog/install', 'POST', {id: p.id, approve: p.permissions, enable: true});
+      done++;
+    } catch (e) { note('st-msg', p.name + ': ' + e.message, false); }
+  }
+  note('st-msg', 'Installed ' + done + ' of ' + picked.length + '.', done === picked.length);
+  return false;
 }
 async function saveName(ev) {
   ev.preventDefault();

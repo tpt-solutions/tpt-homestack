@@ -151,6 +151,17 @@ permissions. Calls go through the plugin dispatcher, not the HTTP router, so
 blueprint routes are not exposed as tools yet. The HTTP transport uses the
 server's global rate limit; the stdio transport has none.
 
+### Blueprint tools
+
+Besides plugin tools, the MCP server lists tools for the built-in blueprints:
+`notes_list`, `notes_create`, `notes_get`, `notes_update`, `notes_delete`, and
+`track_tables_list`, `track_rows_list`, `track_row_add`, `track_row_update`,
+`track_row_delete`. A call runs the same route a browser would use, over loopback,
+with the caller's own credential, so roles, token scopes and rate limits apply.
+These tools need the server running; the stdio transport on its own cannot reach it.
+A blueprint adds its own tools with `tpt_home_core::inventory::submit!` of an
+`McpToolEntry` (see `blueprints/tpt-home-bp-notes/src/mcp.rs`).
+
 ## JS script plugins (`runtime = "js"`)
 
 A script plugin is a single JavaScript file (`entry`, for example `main.js`)
@@ -234,9 +245,17 @@ Debug-build crashes on Windows (an access violation on the first plugin DB call)
 away after upgrading to rusqlite 0.32, which bundles a newer SQLite.
 Release builds are unaffected either way.
 
+## Writing a wasm plugin in another language
+
+Any language that compiles to a module meeting [PLUGIN_ABI.md](PLUGIN_ABI.md) can
+write a plugin. [`examples/assemblyscript`](examples/assemblyscript/README.md) is a
+complete AssemblyScript plugin, built and tested in this repository. C, Go and other
+languages follow the same contract; the module may import only from `env`.
+
 ## Build profile
 
-Run plugins with a release build: `cargo run --release -- run` (or the release binary).
-A debug build of the server can overflow its stack on a plugin response of a few
-hundred bytes; the release build does not. This is the supported profile for plugins
-until the cause is found (see the Phase 4 note in `todo.md`).
+Debug and release builds both run plugins. Debug builds give the tokio worker threads
+a 256 MiB stack, because their wasmi frames are much larger than release frames, and a
+plugin call (a guest calling back into the host) overflowed the default 2 MiB stack.
+The reservation is virtual, so it costs little memory until used. Release builds keep
+the default.

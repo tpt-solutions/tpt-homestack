@@ -32,7 +32,7 @@ inventory::submit! {
         register: |router| {
             router.route(
                 "/api/notify/channels",
-                axum::routing::get(list_channels).post(save_channel),
+                axum::routing::get(list_channels).post(save_channel).layer(tpt_home_core::admin_only!()),
             )
         },
     }
@@ -47,7 +47,7 @@ inventory::submit! {
         register: |router| {
             router.route(
                 "/api/notify/channels/{name}",
-                axum::routing::delete(delete_channel),
+                axum::routing::delete(delete_channel).layer(tpt_home_core::admin_only!()),
             )
         },
     }
@@ -92,6 +92,11 @@ pub async fn save_channel(
             "name must be 1-50 characters: lowercase letters, digits, '_' or '-'",
         ));
     }
+    if body.name == crate::email::EMAIL_CHANNEL {
+        return Err(ApiError::bad_request(
+            "the email channel is set up with the email account (/api/notify/email)",
+        ));
+    }
     if !valid_url(&body.url) {
         return Err(ApiError::bad_request(
             "url must be an http:// or https:// address without spaces (max 2048 characters)",
@@ -120,6 +125,11 @@ pub async fn delete_channel(
     State(db): State<DbPool>,
     Path(name): Path<String>,
 ) -> Result<impl IntoResponse, ApiError> {
+    if name == crate::email::EMAIL_CHANNEL {
+        return Err(ApiError::bad_request(
+            "remove the email account (DELETE /api/notify/email) to delete the email channel",
+        ));
+    }
     let result = sqlx::query("DELETE FROM notification_channels WHERE name = ?1")
         .bind(&name)
         .execute(&db)

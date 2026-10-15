@@ -77,3 +77,16 @@ unrelated changes.
 Crates are not published yet (`todo.md`, Phase 10). Before the first
 publish, the crate names need reserving, and the release checklist needs a
 publish step. Until then, the release is the GitHub binary archives.
+
+## Upgrade check
+
+Before a release, check that the previous release can be upgraded in place with the
+new binary. Download or build the previous release, then run:
+
+```powershell
+pwsh scripts/upgrade-check.ps1 -OldBinary .\previous	pt-home.exe -NewBinary .	argetelease	pt-home.exe
+```
+
+The script writes a note with the old binary, migrates with the new one, and checks
+the note is still served. It also keeps the checked copy `migrate` makes, under the
+data folder in `backups/upgrade/`. A FAIL is a release blocker.

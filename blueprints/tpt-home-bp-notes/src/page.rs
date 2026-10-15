@@ -30,20 +30,20 @@ fn content_fragment() -> String {
         "<div id=\"notes-root\">\n\
          <div class=\"card\">\n\
          <div class=\"row\">\n\
-         <input id=\"q\" placeholder=\"Search notes…\" style=\"max-width:340px\">\n\
+         <input id=\"q\" placeholder=\"Search notes…\" class=\"s-max-width-340px\">\n\
          <button data-click=\"loadNotes\">Search</button>\n\
          <button class=\"secondary\" data-click=\"openEditor\">New note</button>\n\
          </div>\n<div id=\"msg\"></div>\n</div>\n\
-         <div id=\"editor\" class=\"card\" style=\"display:none\">\n\
+         <div id=\"editor\" class=\"card s-display-none\">\n\
          <input id=\"eid\" type=\"hidden\">\n\
          <label for=\"etitle\">Title</label><input id=\"etitle\">\n\
          <label for=\"etags\">Tags (comma separated)</label><input id=\"etags\">\n\
          <label for=\"ebody\">Body (markdown)</label><textarea id=\"ebody\" rows=\"12\"></textarea>\n\
-         <div class=\"row\" style=\"margin-top:12px\">\n\
+         <div class=\"row s-margin-top-12px\">\n\
          <button data-click=\"saveNote\">Save</button>\n\
          <button class=\"secondary\" data-click=\"previewNote\">Preview</button>\n\
          <button class=\"danger\" data-click=\"closeEditor\">Cancel</button>\n\
-         </div>\n<div id=\"preview\" class=\"msg\" style=\"display:none\"></div>\n</div>\n\
+         </div>\n<div id=\"preview\" class=\"msg s-display-none\"></div>\n</div>\n\
          <div id=\"list\"></div>\n</div>\n<script>\n{}\n</script>",
         r#"async function api(url, method, body) {
   const r = await fetch(url, {method, headers:{'Content-Type':'application/json'}, body: body ? JSON.stringify(body) : undefined});

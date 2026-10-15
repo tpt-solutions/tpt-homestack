@@ -95,7 +95,7 @@ pub fn table(headers: &[&str], rows: &[Vec<String>], empty: &str) -> String {
         })
         .collect();
     format!(
-        "<div style=\"overflow-x:auto\"><table><thead><tr>{head}</tr></thead><tbody>{body}</tbody></table></div>"
+        "<div class=\"scroll-x\"><table><thead><tr>{head}</tr></thead><tbody>{body}</tbody></table></div>"
     )
 }
 
@@ -126,7 +126,7 @@ pub fn message(text: &str, ok: bool) -> String {
 pub fn modal(id: &str, title: &str, body: &str) -> String {
     format!(
         "<dialog id=\"{id}\" class=\"modal\" aria-labelledby=\"{id}-title\">\n\
-         <div class=\"spread\"><h2 id=\"{id}-title\" style=\"margin:0\">{title}</h2>\
+         <div class=\"spread\"><h2 id=\"{id}-title\" class=\"m0\">{title}</h2>\
          <button type=\"button\" class=\"secondary\" data-click=\"closeModal:{id}\" aria-label=\"Close\">Close</button></div>\n\
          <div class=\"modal-body\">{body}</div>\n</dialog>",
         id = esc(id),

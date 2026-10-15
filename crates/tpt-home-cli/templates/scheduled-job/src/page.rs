@@ -22,19 +22,19 @@ pub fn render(user: &AuthUser) -> Html<String> {
 
 const BODY: &str = r##"
 <div class="card">
-  <h2 style="margin-top:0">Record an event</h2>
+  <h2 class="mt0">Record an event</h2>
   <input id="note" maxlength="500" placeholder="What happened?">
-  <div class="row" style="margin-top:8px"><button data-click="addEvent">Record</button></div>
+  <div class="row mt8"><button data-click="addEvent">Record</button></div>
   <div id="msg"></div>
 </div>
 <div class="grid">
   <div class="card">
-    <h2 style="margin-top:0">Snapshots</h2>
+    <h2 class="mt0">Snapshots</h2>
     <p class="muted">The job runs hourly and stores the number of events from the last 7 days, one row per day.</p>
     <div id="snapshots"><p class="muted">Loading…</p></div>
   </div>
   <div class="card">
-    <h2 style="margin-top:0">Recent events</h2>
+    <h2 class="mt0">Recent events</h2>
     <div id="events"><p class="muted">Loading…</p></div>
   </div>
 </div>

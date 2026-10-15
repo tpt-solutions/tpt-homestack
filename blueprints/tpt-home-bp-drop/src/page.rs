@@ -28,9 +28,9 @@ pub fn drop_page(user: &AuthUser) -> Html<String> {
 fn content_fragment() -> String {
     format!(
         "<div class=\"card\">\n\
-         <h2 style=\"margin-top:0\">Upload</h2>\n\
+         <h2 class=\"mt0\">Upload</h2>\n\
          <div class=\"row\">\n\
-         <input type=\"file\" id=\"file\" style=\"max-width:340px\">\n\
+         <input type=\"file\" id=\"file\" class=\"s-max-width-340px\">\n\
          <button data-click=\"doUpload\">Upload</button>\n\
          <span class=\"muted\" id=\"upstatus\"></span>\n</div>\n\
          <div id=\"msg\"></div>\n</div>\n\

@@ -14,6 +14,7 @@ use tpt_home_macros::{blueprint, bp_migration, bp_route, bp_ui_route};
 
 pub mod api;
 pub mod csv_io;
+pub mod mcp;
 pub mod page;
 
 /// Track blueprint metadata.

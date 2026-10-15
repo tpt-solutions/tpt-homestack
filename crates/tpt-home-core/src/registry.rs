@@ -496,3 +496,24 @@ pub fn dispatch_webhook(db: &DbPool, delivery: WebhookDelivery) {
         });
     }
 }
+
+/// A tool an AI agent can call, contributed by a blueprint with
+/// `inventory::submit!`. A call runs `method` on `path` through the server's
+/// own HTTP stack with the caller's credential, so roles, token scopes and
+/// rate limits apply exactly as they do for any other request.
+pub struct McpToolEntry {
+    pub blueprint: &'static str,
+    /// Tool name, letters digits and underscores, at most 64 characters.
+    pub name: &'static str,
+    pub description: &'static str,
+    /// JSON Schema of the arguments, as text. Each `{placeholder}` in `path`
+    /// is filled from the argument of the same name.
+    pub input_schema: &'static str,
+    pub method: &'static str,
+    /// Route path under `/api/`, e.g. `/api/notes/{id}`.
+    pub path: &'static str,
+    /// Minimum role. Callers below it do not see the tool.
+    pub role: Option<&'static str>,
+}
+
+inv::collect!(McpToolEntry);

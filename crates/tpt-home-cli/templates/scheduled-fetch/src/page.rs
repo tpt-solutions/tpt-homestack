@@ -22,18 +22,18 @@ pub fn render(user: &AuthUser) -> Html<String> {
 
 const BODY: &str = r##"
 <div class="card">
-  <h2 style="margin-top:0">Source</h2>
+  <h2 class="mt0">Source</h2>
   <p class="muted">Only admins can change the source or fetch now. The job fetches it once an hour.</p>
-  <div class="row" style="gap:8px;flex-wrap:wrap">
-    <input id="url" type="url" placeholder="https://example.com/status.json" style="max-width:420px">
+  <div class="row s-gap-8px-flex-wrap-wrap">
+    <input id="url" type="url" placeholder="https://example.com/status.json" class="w420">
     <button data-click="saveSource">Save</button>
     <button class="secondary" data-click="fetchNow">Fetch now</button>
   </div>
-  <div class="muted" id="current" style="margin-top:8px">Loading…</div>
+  <div class="muted mt8" id="current">Loading…</div>
   <div id="msg"></div>
 </div>
 <div class="card">
-  <h2 style="margin-top:0">Responses</h2>
+  <h2 class="mt0">Responses</h2>
   <div id="list"><p class="muted">Loading…</p></div>
 </div>
 <script>
@@ -58,7 +58,7 @@ async function load() {
         fetches.map(f => '<tr><td>' + esc(when(f.fetched_at)) + '</td><td>' +
           (f.status == null ? 'no response' : Number(f.status)) +
           (f.error ? '<div class="msg error">' + esc(f.error) + '</div>' : '') +
-          '</td><td><pre style="white-space:pre-wrap;max-height:8em;overflow:auto">' + esc(f.body_preview) + '</pre></td></tr>'
+          '</td><td><pre class="s-white-space-pre-wrap-max-height-8em-overflow-auto">' + esc(f.body_preview) + '</pre></td></tr>'
         ).join('') + '</tbody></table>';
   } catch (e) { showError(e); }
 }

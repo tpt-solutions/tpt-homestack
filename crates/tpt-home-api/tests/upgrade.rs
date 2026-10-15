@@ -38,7 +38,7 @@ async fn upgrade_path_keeps_a_checked_copy_and_refuses_newer_databases() {
         .execute(&pool)
         .await
         .unwrap();
-    drop(pool);
+    pool.close().await;
 
     // Dry run lists it and changes nothing.
     let dry = migrate_database(&cfg, true).await.unwrap();
@@ -76,7 +76,7 @@ async fn a_database_from_a_newer_version_is_refused_without_changes() {
         .execute(&pool)
         .await
         .unwrap();
-    drop(pool);
+    pool.close().await;
 
     let err = migrate_database(&cfg, false).await.unwrap_err().to_string();
     assert!(err.contains("newer tpt-homestack"), "{err}");

@@ -77,6 +77,7 @@ fn caller(scopes: &[&str]) -> Caller {
             role: Role::Admin,
         },
         scopes: scopes.iter().map(|s| s.to_string()).collect(),
+        forward: Vec::new(),
     }
 }
 

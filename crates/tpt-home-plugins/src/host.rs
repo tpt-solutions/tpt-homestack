@@ -271,14 +271,18 @@ impl HostServices {
         let Some(url) = url else {
             return Err(failed(format!("channel '{channel}' is not configured")));
         };
-        let target = parse_url(&url)?;
-        let payload = serde_json::json!({ "text": message }).to_string();
-        let outcome = self.send("POST", &target, Some(&payload), "application/json");
-        let (sent, error) = match outcome {
-            Ok(reply) if (200..300).contains(&reply.status) => (true, None),
-            Ok(reply) => (false, Some(format!("status {}", reply.status))),
-            Err(HostError::Failed(reason)) => (false, Some(reason)),
-            Err(HostError::Deadline) => return Err(HostError::Deadline),
+        let (sent, error) = if url == crate::email::EMAIL_CHANNEL_URL {
+            self.send_email(message)?
+        } else {
+            let target = parse_url(&url)?;
+            let payload = serde_json::json!({ "text": message }).to_string();
+            let outcome = self.send("POST", &target, Some(&payload), "application/json");
+            match outcome {
+                Ok(reply) if (200..300).contains(&reply.status) => (true, None),
+                Ok(reply) => (false, Some(format!("status {}", reply.status))),
+                Err(HostError::Failed(reason)) => (false, Some(reason)),
+                Err(HostError::Deadline) => return Err(HostError::Deadline),
+            }
         };
         let now = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
@@ -291,6 +295,19 @@ impl HostServices {
             )
             .map_err(failed)?;
         Ok(sent)
+    }
+
+    /// Mail the message with the admin's SMTP account. Returns the outcome the
+    /// channel records: sent or not, and why not.
+    fn send_email(&mut self, message: &str) -> HostResult<(bool, Option<String>)> {
+        let settings = crate::email::load_sync(self.conn()?).map_err(failed)?;
+        let Some(settings) = settings else {
+            return Ok((false, Some("email is not set up".to_string())));
+        };
+        match crate::email::send(&settings, "tpt-homestack alert", message) {
+            Ok(()) => Ok((true, None)),
+            Err(reason) => Ok((false, Some(reason))),
+        }
     }
 
     /// Send one request, over plain TCP or TLS, and read the reply.

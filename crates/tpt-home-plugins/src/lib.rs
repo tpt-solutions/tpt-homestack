@@ -11,6 +11,7 @@
 
 pub mod catalog;
 pub mod dispatch;
+pub mod email;
 pub mod external;
 pub mod hooks;
 pub mod host;

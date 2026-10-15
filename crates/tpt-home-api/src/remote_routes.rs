@@ -130,6 +130,26 @@ pub fn tailscale_line(found: &Detected) -> String {
     describe_tailscale(&found.tailscale)
 }
 
+/// Ask the server's own tailnet address for `/healthz`, when Tailscale has one
+/// and the server is set up to serve it. Shows whether the HTTPS name answers
+/// from this computer; another device on the tailnet is the real test.
+async fn probe_tailscale(found: &Detected) -> Option<serde_json::Value> {
+    let name = found.tailscale.dns_name.clone()?;
+    let url = format!("https://{name}/healthz");
+    let probe_url = url.clone();
+    let result =
+        tokio::task::spawn_blocking(move || tpt_home_core::fetch::https_get(&probe_url, 4096))
+            .await
+            .ok()?;
+    Some(match result {
+        Ok(body) => json!({
+            "url": url,
+            "reachable": String::from_utf8_lossy(&body).contains("\"ok\":true"),
+        }),
+        Err(error) => json!({"url": url, "reachable": false, "error": error}),
+    })
+}
+
 /// GET /api/admin/remote: the config that matters for remote access, what the
 /// checks found, and the steps.
 pub async fn status(
@@ -139,7 +159,9 @@ pub async fn status(
         .await
         .map_err(|e| ApiError::internal(format!("remote check: {e}")))?;
     let steps = plan(&cfg, &found);
+    let probe = probe_tailscale(&found).await;
     Ok(Json(json!({
+        "probe": probe,
         "config": {
             "host": cfg.host,
             "port": cfg.port,

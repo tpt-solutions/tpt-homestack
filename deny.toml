@@ -21,6 +21,8 @@ allow = [
     "CC0-1.0",
     "BSL-1.0",
     "CDLA-Permissive-2.0",
+    # Zero-clause BSD: permissive, no attribution requirement (used by lettre's mail encoding).
+    "0BSD",
 ]
 # Anything not listed in `allow` (GPL, AGPL, LGPL, MPL, SSPL, EUPL, ...) is
 # rejected by default.

@@ -35,8 +35,8 @@ pub use inventory;
 pub use middleware::RateLimiter;
 pub use migrate::MigrationEntry;
 pub use registry::{
-    Blueprint, BlueprintEntry, JobEntry, PublicRouteEntry, RouteEntry, StartupEntry, UiEntry,
-    WebhookDelivery, WebhookEntry, dispatch_webhook,
+    Blueprint, BlueprintEntry, JobEntry, McpToolEntry, PublicRouteEntry, RouteEntry, StartupEntry,
+    UiEntry, WebhookDelivery, WebhookEntry, dispatch_webhook,
 };
 
 /// Crate version, as reported by `/healthz`.

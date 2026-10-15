@@ -87,7 +87,11 @@ pub struct MigrateReport {
 pub async fn migrate_database(cfg: &Config, dry_run: bool) -> anyhow::Result<MigrateReport> {
     cfg.ensure_dirs()?;
     let db = db::connect(&cfg.db_path()).await?;
-    prepare_database(&db, cfg, dry_run).await
+    let report = prepare_database(&db, cfg, dry_run).await;
+    // Close before returning: a dropped pool keeps its connections open for a
+    // while, and a caller that reopens the file right away can hit the lock.
+    db.close().await;
+    report
 }
 
 async fn prepare_database(

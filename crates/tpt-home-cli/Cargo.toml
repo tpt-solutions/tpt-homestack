@@ -29,6 +29,7 @@ toml = { workspace = true }
 anyhow = { workspace = true }
 tracing = { workspace = true }
 uuid = { workspace = true }
+mimalloc = "0.1.52"
 
 [features]
 default = ["js", "https"]

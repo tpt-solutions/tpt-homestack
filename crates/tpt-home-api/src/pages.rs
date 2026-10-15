@@ -99,7 +99,7 @@ pub async fn welcome_page(
         &registry::nav_entries(),
         "/welcome",
         &view,
-        &ui::welcome_content(&name, &users),
+        &ui::welcome_content(&name, &users, &phone_card()),
     )))
 }
 
@@ -125,7 +125,7 @@ fn phone_card() -> String {
     }
     if !cfg.advertise {
         return format!(
-            "<div class=\"card\">\n<h2 style=\"margin-top:0\">Open on a phone or tablet</h2>\n\
+            "<div class=\"card\">\n<h2 class=\"mt0\">Open on a phone or tablet</h2>\n\
              <p>Name announcing is off (<code>advertise = false</code>). Use this computer's IP address with port <code>{}</code>.</p>\n</div>",
             cfg.port
         );
@@ -246,7 +246,7 @@ async function load() {
     document.getElementById('msg').innerHTML = '';
     document.getElementById('jobs').innerHTML = jobs.length === 0
       ? '<p class="muted">No scheduled jobs are registered.</p>'
-      : '<div style="overflow-x:auto"><table><thead><tr><th>Blueprint</th><th>Job</th><th>Every</th><th>Last started</th><th>Last finished</th><th>Last result</th><th>Next run</th><th>Runs</th><th>Failures</th></tr></thead><tbody>' +
+      : '<div class="scroll-x"><table><thead><tr><th>Blueprint</th><th>Job</th><th>Every</th><th>Last started</th><th>Last finished</th><th>Last result</th><th>Next run</th><th>Runs</th><th>Failures</th></tr></thead><tbody>' +
         jobs.map(j =>
           '<tr><td>' + esc(j.blueprint) + '</td><td>' + esc(j.name) + '</td><td>' + Number(j.every_secs) + ' s</td>' +
           '<td>' + esc(when(j.last_started_at)) + '</td><td>' + esc(when(j.last_finished_at)) + '</td>' +
@@ -290,21 +290,41 @@ const STATUS_BODY: &str = r##"
 </div>
 <div class="card">
   <div class="spread">
-    <h3 style="margin:0">Updates</h3>
+    <h3 class="m0">Updates</h3>
     <button class="secondary" data-click="checkUpdate">Check for updates</button>
   </div>
   <div id="update"><p class="muted">Not checked yet. Checks read the release address set as <code>update_url</code>; nothing is installed.</p></div>
 </div>
 <div class="card">
   <div class="spread">
-    <h3 style="margin:0">Backups</h3>
+    <h3 class="m0">Email alerts</h3>
+    <span class="muted" id="email-state"></span>
+  </div>
+  <p class="muted">One SMTP account sends alerts from plugins that name the <code>email</code> channel. The password is stored on this server and is never shown again.</p>
+  <form id="email-form" data-submit="saveEmail" class="form-grid">
+    <label>SMTP host <input id="em-host" required maxlength="253" placeholder="smtp.example.org"></label>
+    <label>Port <input id="em-port" type="number" min="1" max="65535" value="587" required></label>
+    <label>Encryption
+      <select id="em-security"><option value="starttls">STARTTLS (port 587)</option><option value="tls">TLS (port 465)</option><option value="none">None (trusted relay only)</option></select>
+    </label>
+    <label>Username (optional) <input id="em-user" autocomplete="username"></label>
+    <label>Password (leave empty to keep the saved one) <input id="em-pass" type="password" autocomplete="new-password"></label>
+    <label>From address <input id="em-from" type="email" required></label>
+    <label>Send alerts to <input id="em-to" type="email" required></label>
+    <div class="spread"><button type="submit">Save</button><button type="button" class="secondary" data-click="testEmail">Send a test</button><button type="button" class="danger" data-click="removeEmail">Remove</button></div>
+  </form>
+  <div id="email-msg"></div>
+</div>
+<div class="card">
+  <div class="spread">
+    <h3 class="m0">Backups</h3>
     <button id="make" type="button">Back up now</button>
   </div>
-  <p class="muted" style="margin-top:8px">A backup is a copy of the database and the uploads. Downloads contain the database only. Restoring needs the server stopped: run <code>tpt-home restore &lt;path&gt;</code> with the path shown below.</p>
+  <p class="muted mt8">A backup is a copy of the database and the uploads. Downloads contain the database only. Restoring needs the server stopped: run <code>tpt-home restore &lt;path&gt;</code> with the path shown below.</p>
   <div id="backups"><p class="muted">Loading…</p></div>
-  <form id="upform" style="margin-top:14px">
+  <form id="upform" class="mt14">
     <label for="upfile">Upload a database file as a new backup</label>
-    <div class="spread" style="margin-top:6px">
+    <div class="spread mt6">
       <input id="upfile" type="file" accept=".db,application/x-sqlite3,application/octet-stream" required>
       <button type="submit" class="secondary">Upload</button>
     </div>
@@ -328,7 +348,7 @@ async function loadHealth() {
     const failing = h.failing_jobs > 0
       ? '<span class="badge danger">' + h.failing_jobs + ' failing</span>'
       : '<span class="badge">' + h.jobs + ' ok</span>';
-    document.getElementById('health').innerHTML = '<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(160px,1fr));gap:14px">' +
+    document.getElementById('health').innerHTML = '<div class="health-grid">' +
       cell('Version', esc(h.version)) +
       cell('Uptime', Math.floor(h.uptime_secs / 3600) + ' h ' + Math.floor(h.uptime_secs % 3600 / 60) + ' min') +
       cell('Blueprints', h.blueprints) +
@@ -338,6 +358,55 @@ async function loadHealth() {
       cell('Last backup', esc(when(h.last_backup_at))) +
       cell('Scheduled backups', h.backup_every_hours > 0 ? 'every ' + h.backup_every_hours + ' h, keep ' + h.backup_keep : 'off') +
       '</div>';
+  } catch (e) { show(e.message, false); }
+}
+async function loadEmail() {
+  try {
+    const e = await api('/api/notify/email');
+    document.getElementById('email-state').textContent = e.configured ? 'configured' : 'not set up';
+    if (e.configured) {
+      document.getElementById('em-host').value = e.host;
+      document.getElementById('em-port').value = e.port;
+      document.getElementById('em-security').value = e.security;
+      document.getElementById('em-user').value = e.username;
+      document.getElementById('em-from').value = e.from;
+      document.getElementById('em-to').value = e.to;
+    }
+  } catch (e) { show(e.message, false); }
+}
+async function saveEmail(ev) {
+  ev.preventDefault();
+  const body = {
+    host: document.getElementById('em-host').value,
+    port: Number(document.getElementById('em-port').value),
+    security: document.getElementById('em-security').value,
+    username: document.getElementById('em-user').value,
+    password: document.getElementById('em-pass').value,
+    from: document.getElementById('em-from').value,
+    to: document.getElementById('em-to').value,
+  };
+  try {
+    await api('/api/notify/email', { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
+    document.getElementById('em-pass').value = '';
+    show('email settings saved', true);
+    loadEmail();
+  } catch (e) { show(e.message, false); }
+  return false;
+}
+async function testEmail() {
+  const box = document.getElementById('email-msg');
+  box.textContent = 'Sending…';
+  try {
+    await api('/api/notify/email/test', { method: 'POST' });
+    box.textContent = 'Sent. Check the inbox.';
+  } catch (e) { box.textContent = 'Not sent: ' + e.message; }
+}
+async function removeEmail() {
+  if (!confirm('Remove the email account and the email channel?')) return;
+  try {
+    await api('/api/notify/email', { method: 'DELETE' });
+    show('email account removed', true);
+    loadEmail();
   } catch (e) { show(e.message, false); }
 }
 async function checkUpdate() {
@@ -365,13 +434,13 @@ async function loadBackups() {
     const list = await api('/api/admin/backups');
     document.getElementById('backups').innerHTML = list.length === 0
       ? '<p class="muted">No backups yet.</p>'
-      : '<div style="overflow-x:auto"><table><thead><tr><th>Taken</th><th>Database</th><th>Uploads</th><th>Restore path</th><th></th></tr></thead><tbody>' +
+      : '<div class="scroll-x"><table><thead><tr><th>Taken</th><th>Database</th><th>Uploads</th><th>Restore path</th><th></th></tr></thead><tbody>' +
         list.map(b => '<tr><td>' + esc(when(b.created_at)) + '</td><td>' + size(b.db_bytes) + '</td><td>' + (b.has_uploads ? 'yes' : 'no') +
           '</td><td><code>' + esc(b.path) + '</code></td><td><a href="/api/admin/backups/' + encodeURIComponent(b.name) + '/download">Download database</a></td></tr>').join('') +
         '</tbody></table></div>';
   } catch (e) { show(e.message, false); }
 }
-function load() { loadHealth(); loadBackups(); }
+function load() { loadHealth(); loadBackups(); loadEmail(); }
 document.getElementById('make').addEventListener('click', async () => {
   try {
     const b = await api('/api/admin/backups', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}' });

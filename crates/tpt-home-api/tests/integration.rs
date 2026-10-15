@@ -738,6 +738,17 @@ async fn html_pages_allow_only_nonced_scripts() {
         "no nonced script"
     );
     assert!(!html.contains("<script>"), "a script tag without the nonce");
+    // Styles: no inline style attributes, and the shell's <style> is nonced.
+    assert!(!csp.contains("style-src 'self' 'unsafe-inline'"), "{csp}");
+    assert!(
+        csp.contains(&format!("style-src 'self' 'nonce-{nonce}'")),
+        "{csp}"
+    );
+    assert!(
+        html.contains(&format!("<style nonce=\"{nonce}\">")),
+        "no nonced style"
+    );
+    assert!(!html.contains(" style=\""), "an inline style attribute");
 }
 
 #[tokio::test]

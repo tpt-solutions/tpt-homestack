@@ -12,6 +12,11 @@ mod scaffold;
 use clap::{CommandFactory, Parser, Subcommand};
 use clap_complete::{Shell, generate};
 
+// mimalloc keeps the server's working set small under concurrent requests; see
+// docs/BENCHMARKS.md for the measurements behind this choice.
+#[global_allocator]
+static GLOBAL: mimalloc::MiMalloc = mimalloc::MiMalloc;
+
 use tpt_home_core::auth::user::{self, Role};
 use tpt_home_core::config::Config;
 
@@ -273,8 +278,18 @@ fn main() -> anyhow::Result<()> {
     if std::env::args().nth(1).as_deref() == Some(tpt_home_plugins::script_worker::WORKER_ARG) {
         std::process::exit(tpt_home_plugins::script_worker::run_worker());
     }
+    // Debug builds have much larger stack frames, and a plugin call (wasmi running
+    // a guest, which calls back into the host) overflows tokio's 2 MiB worker stack.
+    // Release frames fit the default. The reservation is virtual, so the extra
+    // stack costs little memory until it is used.
+    let worker_stack = if cfg!(debug_assertions) {
+        256 * 1024 * 1024
+    } else {
+        2 * 1024 * 1024
+    };
     tokio::runtime::Builder::new_multi_thread()
         .enable_all()
+        .thread_stack_size(worker_stack)
         .build()?
         .block_on(cli_main())
 }
