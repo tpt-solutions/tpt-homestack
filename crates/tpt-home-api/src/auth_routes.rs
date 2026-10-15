@@ -37,9 +37,20 @@ pub async fn login(
     State(db): State<DbPool>,
     Json(creds): Json<Credentials>,
 ) -> Result<impl IntoResponse, ApiError> {
-    let user = authenticate(&db, &creds.username, &creds.password)
-        .await
-        .map_err(|_| ApiError::Unauthorized)?;
+    // Checked before the password, so a locked name costs no hashing.
+    if auth::lockout::locked_for(&creds.username).is_some() {
+        return Err(ApiError::TooManyRequests);
+    }
+    let user = match authenticate(&db, &creds.username, &creds.password).await {
+        Ok(user) => {
+            auth::lockout::record_success(&creds.username);
+            user
+        }
+        Err(_) => {
+            auth::lockout::record_failure(&creds.username);
+            return Err(ApiError::Unauthorized);
+        }
+    };
     let token = auth::session::create_session(&db, user.id, config::global().session_ttl()).await?;
     let cookie = session_cookie(
         &token,
@@ -94,6 +105,7 @@ pub async fn change_password(
         .await
         .map_err(|_| ApiError::Unauthorized)?;
     auth::user::set_password(&db, user.id, &body.new_password).await?;
+    tpt_home_core::settings::set_must_change_password(&db, user.id, false).await?;
     Ok(Json(json!({ "ok": true, "relogin": true })))
 }
 

@@ -6,10 +6,16 @@
 //! adds more `tpt-home-bp-*` dependencies and they self-register.
 
 mod backup;
+mod remote;
 mod scaffold;
 
 use clap::{CommandFactory, Parser, Subcommand};
 use clap_complete::{Shell, generate};
+
+// mimalloc keeps the server's working set small under concurrent requests; see
+// docs/BENCHMARKS.md for the measurements behind this choice.
+#[global_allocator]
+static GLOBAL: mimalloc::MiMalloc = mimalloc::MiMalloc;
 
 use tpt_home_core::auth::user::{self, Role};
 use tpt_home_core::config::Config;
@@ -19,9 +25,9 @@ use tpt_home_core::config::Config;
 /// rest of the binary never calls. Taking the address of each blueprint's
 /// `__link_anchor` keeps its registration object (routes, migrations, UI,
 /// startup tasks) in the binary. Add an entry for every compiled-in
-/// blueprint.
+/// blueprint; `tpt-home new` does this for the blueprints it creates.
 #[allow(dead_code)]
-static BLUEPRINT_LINK_ANCHORS: [fn() -> &'static str; 5] = [
+static BLUEPRINT_LINK_ANCHORS: &[fn() -> &'static str] = &[
     tpt_home_bp_notes::__link_anchor,
     tpt_home_bp_drop::__link_anchor,
     tpt_home_bp_track::__link_anchor,
@@ -56,8 +62,12 @@ enum Command {
         #[arg(long, env = "TPT_HOME_ADMIN_PASSWORD")]
         admin_password: Option<String>,
     },
-    /// Apply pending migrations and exit.
-    Migrate,
+    /// Apply pending migrations and exit. A copy of the database is kept first.
+    Migrate {
+        /// Only list the pending migrations; change nothing.
+        #[arg(long)]
+        dry_run: bool,
+    },
     /// Run the server (foreground).
     Run {
         #[arg(long)]
@@ -65,10 +75,17 @@ enum Command {
         #[arg(long)]
         port: Option<u16>,
     },
-    /// Scaffold a new blueprint crate and register it in the workspace.
+    /// Scaffold a new blueprint crate (or, with --plugin, a WASM plugin) and
+    /// register it in the workspace.
     New {
-        /// Blueprint id (lowercase letters/digits/underscore).
+        /// Blueprint or plugin id (lowercase letters/digits/underscore).
         name: String,
+        /// Starter code to generate.
+        #[arg(long, value_enum, default_value_t = scaffold::Template::Basic, conflicts_with = "plugin")]
+        template: scaffold::Template,
+        /// Scaffold a WASM plugin in `plugins/<name>` instead of a compiled-in blueprint.
+        #[arg(long)]
+        plugin: bool,
     },
     /// Manage user accounts.
     User {
@@ -92,6 +109,11 @@ enum Command {
         #[arg(long)]
         out_dir: Option<std::path::PathBuf>,
     },
+    /// Remote access: check clients and set up Tailscale or Cloudflare.
+    Remote {
+        #[command(subcommand)]
+        cmd: RemoteCmd,
+    },
     /// Restore a database backup (server must be stopped).
     Restore {
         /// Path to the `tpt-<timestamp>.db` produced by `backup`.
@@ -102,7 +124,7 @@ enum Command {
     },
     /// Generate shell completions.
     Completions { shell: Shell },
-    /// Manage WASM plugins (Phase 4 — not yet implemented).
+    /// Build, install and manage plugins (WASM, JavaScript and external).
     Plugin {
         #[command(subcommand)]
         cmd: PluginCmd,
@@ -132,6 +154,20 @@ enum TokenCmd {
     },
     /// Revoke a token by id (see `token list`).
     Revoke { id: i64 },
+}
+
+#[derive(Subcommand)]
+enum RemoteCmd {
+    /// Show which remote-access clients are installed and signed in.
+    Status,
+    /// Explain the steps for a provider and change config.toml after confirmation.
+    Setup {
+        #[arg(long, value_enum)]
+        provider: remote::Provider,
+        /// Skip the confirmation prompt.
+        #[arg(long)]
+        yes: bool,
+    },
 }
 
 #[derive(Subcommand)]
@@ -176,9 +212,51 @@ enum PluginCmd {
         #[arg(long)]
         out: Option<std::path::PathBuf>,
     },
-    /// Install a `.tptp` package. Not yet implemented here: install through
-    /// the admin API (`POST /api/plugins/install`).
-    Install { path: std::path::PathBuf },
+    /// Install a `.tptp` package. Same rules as `POST /api/plugins/install`:
+    /// only the permissions in `--approve` are granted.
+    Install {
+        path: std::path::PathBuf,
+        /// Comma-separated permissions to approve, e.g. `db,kv`.
+        #[arg(long, default_value = "")]
+        approve: String,
+        /// Enable after install. Without it, an upgrade keeps the current state.
+        #[arg(long)]
+        enable: bool,
+        /// Signature file (`<package>.sig`) from `plugin sign`. Checked against
+        /// `trusted_plugin_keys` in config.toml.
+        #[arg(long)]
+        signature: Option<std::path::PathBuf>,
+    },
+    /// Create a signing key for plugin packages. Writes the secret to `--out`
+    /// (refusing to overwrite) and the public key to `<out>.pub`.
+    Keygen {
+        /// Where to write the secret key.
+        #[arg(long)]
+        out: std::path::PathBuf,
+    },
+    /// Sign a `.tptp` package with a secret key from `plugin keygen`. Writes
+    /// `<package>.sig` next to it.
+    Sign {
+        /// The package to sign.
+        package: std::path::PathBuf,
+        /// Secret key file from `plugin keygen`.
+        #[arg(long)]
+        key: std::path::PathBuf,
+    },
+    /// Enable an installed plugin.
+    Enable { id: String },
+    /// Disable an installed plugin. Its data is kept.
+    Disable { id: String },
+    /// Uninstall a plugin. Dropping its data needs `--yes`.
+    Remove {
+        id: String,
+        /// Keep the plugin's data tables and key/value entries.
+        #[arg(long)]
+        keep_data: bool,
+        /// Confirm dropping the plugin's data (not needed with `--keep-data`).
+        #[arg(long)]
+        yes: bool,
+    },
 }
 
 fn random_password() -> String {
@@ -193,8 +271,35 @@ fn load_config(data_dir: Option<std::path::PathBuf>) -> anyhow::Result<Config> {
     Config::load(data_dir)
 }
 
-#[tokio::main]
-async fn main() -> anyhow::Result<()> {
+fn main() -> anyhow::Result<()> {
+    // A script worker runs one JavaScript call and exits. It must not parse
+    // CLI arguments or start the async runtime, so check for it first.
+    #[cfg(feature = "js")]
+    if std::env::args().nth(1).as_deref() == Some(tpt_home_plugins::script_worker::WORKER_ARG) {
+        std::process::exit(tpt_home_plugins::script_worker::run_worker());
+    }
+    // Debug builds have much larger stack frames, and a plugin call (wasmi running
+    // a guest, which calls back into the host) overflows tokio's 2 MiB worker stack.
+    // Release frames fit the default. The reservation is virtual, so the extra
+    // stack costs little memory until it is used.
+    let worker_stack = if cfg!(debug_assertions) {
+        256 * 1024 * 1024
+    } else {
+        2 * 1024 * 1024
+    };
+    tokio::runtime::Builder::new_multi_thread()
+        .enable_all()
+        .thread_stack_size(worker_stack)
+        .build()?
+        .block_on(cli_main())
+}
+
+async fn cli_main() -> anyhow::Result<()> {
+    // JavaScript plugins run in worker processes of this same binary.
+    #[cfg(feature = "js")]
+    if let Ok(exe) = std::env::current_exe() {
+        tpt_home_plugins::script_worker::set_worker_exe(exe);
+    }
     let cli = Cli::parse();
 
     match cli.command {
@@ -202,7 +307,7 @@ async fn main() -> anyhow::Result<()> {
             admin_user,
             admin_password,
         } => init(cli.data_dir, admin_user, admin_password).await,
-        Command::Migrate => migrate(cli.data_dir).await,
+        Command::Migrate { dry_run } => migrate(cli.data_dir, dry_run).await,
         Command::Run { host, port } => {
             let mut cfg = load_config(cli.data_dir)?;
             if let Some(h) = host {
@@ -213,13 +318,30 @@ async fn main() -> anyhow::Result<()> {
             }
             tpt_home_api::serve(cfg).await
         }
-        Command::New { name } => scaffold::new_blueprint(&name),
+        Command::New {
+            name,
+            template,
+            plugin,
+        } => {
+            if plugin {
+                scaffold::new_plugin(&name)
+            } else {
+                scaffold::new_blueprint(&name, template)
+            }
+        }
         Command::User { cmd } => user_cmd(cli.data_dir, cmd).await,
         Command::Token { cmd } => token_cmd(cli.data_dir, cmd).await,
         Command::Mcp { token } => mcp_cmd(cli.data_dir, token).await,
         Command::Backup { out_dir } => backup::backup(&load_config(cli.data_dir)?, out_dir).await,
         Command::Restore { backup, yes } => {
             backup::restore(&load_config(cli.data_dir)?, &backup, yes).await
+        }
+        Command::Remote { cmd } => {
+            let cfg = load_config(cli.data_dir)?;
+            match cmd {
+                RemoteCmd::Status => remote::status(&cfg),
+                RemoteCmd::Setup { provider, yes } => remote::setup(&cfg, provider, yes),
+            }
         }
         Command::Completions { shell } => {
             generate(
@@ -231,26 +353,6 @@ async fn main() -> anyhow::Result<()> {
             Ok(())
         }
         Command::Plugin { cmd } => match cmd {
-            PluginCmd::List => {
-                let cfg = load_config(cli.data_dir)?;
-                let dir = cfg.data_dir.join("plugins");
-                if dir.is_dir() {
-                    let mut found = false;
-                    for entry in std::fs::read_dir(&dir)? {
-                        let p = entry?.path();
-                        if p.extension().is_some_and(|e| e == "tptp") {
-                            println!("{}", p.display());
-                            found = true;
-                        }
-                    }
-                    if !found {
-                        println!("no plugins installed in {}", dir.display());
-                    }
-                } else {
-                    println!("no plugins directory at {}", dir.display());
-                }
-                Ok(())
-            }
             PluginCmd::Build { dir, out } => {
                 let manifest = tpt_home_plugins::manifest::from_dir(&dir)?;
                 let package = tpt_home_plugins::package::pack(&dir)?;
@@ -264,12 +366,146 @@ async fn main() -> anyhow::Result<()> {
                 println!("wrote {} ({} bytes)", out.display(), package.bytes.len());
                 Ok(())
             }
-            PluginCmd::Install { .. } => {
-                anyhow::bail!(
-                    "CLI install is not implemented yet; upload the package with POST /api/plugins/install (admin)"
-                )
-            }
+            PluginCmd::Keygen { out } => plugin_keygen(&out),
+            PluginCmd::Sign { package, key } => plugin_sign(&package, &key),
+            cmd => plugin_admin(cli.data_dir, cmd).await,
         },
+    }
+}
+
+/// `plugin install|enable|disable|remove`. These write to the database, which
+/// is the server's source of truth, but the server keeps plugins in memory and
+/// loads them at startup. A running server picks up the change on restart; use
+/// the admin API for an immediate change.
+/// `plugin keygen`: a new Ed25519 key. The secret is written with no
+/// overwrite, and on Unix only its owner can read it.
+fn plugin_keygen(out: &std::path::Path) -> anyhow::Result<()> {
+    use std::io::Write;
+    let (secret, public) = tpt_home_plugins::signing::generate_keypair();
+    let pub_path = std::path::PathBuf::from(format!("{}.pub", out.display()));
+    let mut options = std::fs::OpenOptions::new();
+    options.write(true).create_new(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        options.mode(0o600);
+    }
+    let mut file = options
+        .open(out)
+        .map_err(|e| anyhow::anyhow!("cannot create {}: {e}", out.display()))?;
+    writeln!(file, "{secret}")?;
+    std::fs::write(&pub_path, format!("{public}\n"))?;
+    println!("wrote secret key {} (keep it private)", out.display());
+    println!("wrote public key {}", pub_path.display());
+    println!("add this to trusted_plugin_keys in config.toml: {public}");
+    Ok(())
+}
+
+/// `plugin sign`: the signature of the package's exact bytes, as hex.
+fn plugin_sign(package: &std::path::Path, key: &std::path::Path) -> anyhow::Result<()> {
+    let secret = std::fs::read_to_string(key)
+        .map_err(|e| anyhow::anyhow!("cannot read {}: {e}", key.display()))?;
+    let archive = std::fs::read(package)?;
+    let signature = tpt_home_plugins::signing::sign(&archive, &secret)?;
+    let sig_path = std::path::PathBuf::from(format!("{}.sig", package.display()));
+    std::fs::write(&sig_path, format!("{signature}\n"))?;
+    println!("wrote {}", sig_path.display());
+    Ok(())
+}
+
+async fn plugin_admin(data_dir: Option<std::path::PathBuf>, cmd: PluginCmd) -> anyhow::Result<()> {
+    use tpt_home_plugins::{lifecycle, manifest::Permissions};
+
+    let cfg = load_config(data_dir)?;
+    let db = tpt_home_api::init_server(cfg.clone()).await?;
+    // Enable needs the plugin loaded in this process; the others do not.
+    lifecycle::load_installed(&db).await?;
+
+    match cmd {
+        PluginCmd::Install {
+            path,
+            approve,
+            enable,
+            signature,
+        } => {
+            let archive = std::fs::read(&path)?;
+            let signature = match signature {
+                Some(sig_path) => Some(std::fs::read_to_string(&sig_path)?),
+                None => None,
+            };
+            let signed_by =
+                tpt_home_plugins::signing::check_install(&archive, signature.as_deref(), &cfg)?;
+            let granted = Permissions::parse_list(&approve).map_err(anyhow::Error::msg)?;
+            let (staged, manifest) = lifecycle::stage_package(&archive)?;
+            // Same default as the admin API: an upgrade keeps its current state.
+            let enable = if enable {
+                true
+            } else {
+                lifecycle::is_enabled(&db, &manifest.plugin.id).await?
+            };
+            let installed = match lifecycle::install_from_dir(&db, &staged, enable, &granted).await
+            {
+                Ok(installed) => installed,
+                Err(e) => {
+                    let _ = std::fs::remove_dir_all(&staged);
+                    return Err(e);
+                }
+            };
+            let effective = granted.intersect(&installed.permissions);
+            println!(
+                "installed {} {} (enabled: {enable}, approved: {})",
+                installed.plugin.id,
+                installed.plugin.version,
+                effective.to_json()
+            );
+            match signed_by {
+                Some(key) => println!("signature verified (key {key})"),
+                None => println!("unsigned package"),
+            }
+            Ok(())
+        }
+        PluginCmd::Enable { id } => {
+            lifecycle::enable(&db, &id).await?;
+            println!("enabled {id}");
+            Ok(())
+        }
+        PluginCmd::Disable { id } => {
+            lifecycle::disable(&db, &id).await?;
+            println!("disabled {id}");
+            Ok(())
+        }
+        PluginCmd::Remove { id, keep_data, yes } => {
+            if !keep_data && !yes {
+                anyhow::bail!(
+                    "removing {id} drops its data; pass --keep-data to keep it, or --yes to drop it"
+                );
+            }
+            let dropped = lifecycle::uninstall(&db, &id, keep_data).await?;
+            if keep_data {
+                println!("removed {id} (data kept)");
+            } else {
+                println!("removed {id} (dropped {dropped} table(s) and its key/value entries)");
+            }
+            Ok(())
+        }
+        PluginCmd::List => {
+            let rows: Vec<(String, String, String, bool, String)> = sqlx::query_as(
+                "SELECT id, name, version, enabled, approved_permissions FROM plugins ORDER BY id",
+            )
+            .fetch_all(&db)
+            .await?;
+            if rows.is_empty() {
+                println!("no plugins installed");
+            }
+            for (id, name, version, enabled, approved) in rows {
+                let state = if enabled { "enabled" } else { "disabled" };
+                println!("{id} {version} ({name}) {state} approved={approved}");
+            }
+            Ok(())
+        }
+        PluginCmd::Build { .. } | PluginCmd::Keygen { .. } | PluginCmd::Sign { .. } => {
+            unreachable!("handled in main")
+        }
     }
 }
 
@@ -288,6 +524,7 @@ async fn init(
              # host = \"127.0.0.1\"\n\
              # port = 8080\n\
              # secure_cookies = false   # set true behind HTTPS\n\
+             # trust_proxy = false      # set true only behind Caddy/cloudflared\n\
              # session_ttl_hours = 72\n\
              # max_upload_mb = 512\n",
         )?;
@@ -297,12 +534,17 @@ async fn init(
 
     if user::count_users(&db).await? == 0 {
         let username = admin_user.unwrap_or_else(|| "admin".to_string());
+        let generated = admin_password.is_none();
         let password = admin_password.unwrap_or_else(|| {
             let pw = random_password();
             println!("generated admin password (store it now): {pw}");
             pw
         });
         let admin = user::create_user(&db, &username, &password, Role::Admin).await?;
+        if generated {
+            // A generated password is only a starting point: change it at the first sign-in.
+            tpt_home_core::settings::set_must_change_password(&db, admin.id, true).await?;
+        }
         println!("created admin user '{}' (id {})", admin.username, admin.id);
     } else {
         println!("users already exist; skipping admin bootstrap");
@@ -311,14 +553,21 @@ async fn init(
     Ok(())
 }
 
-async fn migrate(data_dir: Option<std::path::PathBuf>) -> anyhow::Result<()> {
+async fn migrate(data_dir: Option<std::path::PathBuf>, dry_run: bool) -> anyhow::Result<()> {
     let cfg = load_config(data_dir)?;
-    let db = tpt_home_api::init_server(cfg).await?;
-    let applied = tpt_home_core::migrate::run_all(&db).await?;
-    if applied.is_empty() {
+    let report = tpt_home_api::migrate_database(&cfg, dry_run).await?;
+    if report.pending.is_empty() {
         println!("database is up to date");
+    } else if dry_run {
+        println!("{} migration(s) would be applied:", report.pending.len());
+        for key in &report.pending {
+            println!("  {key}");
+        }
     } else {
-        for key in applied {
+        if let Some(copy) = &report.snapshot {
+            println!("copy saved before upgrading: {}", copy.display());
+        }
+        for key in &report.applied {
             println!("applied {key}");
         }
     }
@@ -411,6 +660,7 @@ async fn user_cmd(data_dir: Option<std::path::PathBuf>, cmd: UserCmd) -> anyhow:
             });
             let role = if admin { Role::Admin } else { Role::User };
             let u = user::create_user(&db, &username, &password, role).await?;
+            tpt_home_core::settings::set_must_change_password(&db, u.id, true).await?;
             println!("created {} '{}' (id {})", u.role(), u.username, u.id);
         }
         UserCmd::List => {
@@ -443,6 +693,8 @@ async fn user_cmd(data_dir: Option<std::path::PathBuf>, cmd: UserCmd) -> anyhow:
                 pw
             });
             user::set_password(&db, u.id, &password).await?;
+            // Set by an admin, so the user chooses their own at the next sign-in.
+            tpt_home_core::settings::set_must_change_password(&db, u.id, true).await?;
             println!("password reset for '{}'", u.username);
         }
     }

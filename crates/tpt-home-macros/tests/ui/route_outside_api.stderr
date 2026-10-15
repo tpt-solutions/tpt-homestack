@@ -1,0 +1,7 @@
+error: #[bp_route] paths must start with "/api/" (blueprints share one router)
+ --> tests/ui/route_outside_api.rs:3:1
+  |
+3 | #[bp_route(get, "/notes")]
+  | ^^^^^^^^^^^^^^^^^^^^^^^^^^
+  |
+  = note: this error originates in the attribute macro `bp_route` (in Nightly builds, run with -Z macro-backtrace for more info)

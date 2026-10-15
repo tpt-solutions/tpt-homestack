@@ -52,87 +52,193 @@ fn add_member(manifest: &str, member: &str) -> anyhow::Result<String> {
     Ok(out)
 }
 
-const LIB_TEMPLATE: &str = r##"// SPDX-License-Identifier: MIT OR Apache-2.0
-// Copyright (c) 2026 TPT Solutions
-
-//! <NAME> — a tpt-homestack blueprint.
-//!
-//! This is the whole platform integration surface: one metadata macro, one
-//! SQL migration, routes, and a UI page. Delete what you don't need and
-//! write your business logic; the macros do the wiring.
-
-use tpt_home_core::prelude::*;
-use tpt_home_macros::{blueprint, bp_migration, bp_route, bp_ui_route};
-
-#[blueprint(id = "<NAME>", name = "<TITLE>")]
-pub struct <PASCAL>Blueprint;
-
-#[bp_migration]
-const SCHEMA: &str = r#"
-    CREATE TABLE IF NOT EXISTS <NAME>_items (
-        id         INTEGER PRIMARY KEY,
-        title      TEXT    NOT NULL,
-        created_at INTEGER NOT NULL
+/// Register `name` as a path dependency of the CLI, so its registration
+/// statics are linked into the binary. Without this the blueprint is a
+/// workspace member that never reaches the server.
+fn add_cli_dependency(manifest: &str, name: &str) -> anyhow::Result<String> {
+    if manifest.contains(&format!("tpt-home-bp-{name} =")) {
+        return Ok(manifest.to_string()); // already linked
+    }
+    let line = format!(
+        "tpt-home-bp-{name} = {{ path = \"../../blueprints/tpt-home-bp-{name}\", version = \"0.1.0\" }}"
     );
-"#;
-
-#[bp_route(get, "/api/<NAME>/items")]
-pub async fn list_items(
-    State(db): State<DbPool>,
-) -> Result<impl IntoResponse, ApiError> {
-    let items: Vec<(i64, String)> =
-        sqlx::query_as("SELECT id, title FROM <NAME>_items ORDER BY id DESC")
-            .fetch_all(&db)
-            .await?;
-    Ok(Json(items))
-}
-
-#[bp_route(post, "/api/<NAME>/items")]
-pub async fn create_item(
-    State(db): State<DbPool>,
-    Json(body): Json<CreateItem>,
-) -> Result<impl IntoResponse, ApiError> {
-    let (id,): (i64,) = sqlx::query_as(
-        "INSERT INTO <NAME>_items (title, created_at) VALUES (?1, ?2) RETURNING id",
-    )
-    .bind(body.title.trim())
-    .bind(unix_now())
-    .fetch_one(&db)
-    .await?;
-    Ok((axum::http::StatusCode::CREATED, Json(serde_json::json!({ "id": id }))))
-}
-
-#[derive(serde::Deserialize)]
-pub struct CreateItem {
-    pub title: String,
-}
-
-#[bp_ui_route("/<NAME>", name = "<TITLE>")]
-pub async fn <NAME>_page(
-    axum::Extension(user): axum::Extension<AuthUser>,
-) -> impl IntoResponse {
-    let view = tpt_home_ui::UserView {
-        username: user.username.clone(),
-        role: user.role.as_str().to_string(),
+    // Split on '\n' and keep any '\r', so CRLF files keep their endings.
+    let cr = line_ending_suffix(manifest);
+    let mut lines: Vec<&str> = manifest.split('\n').collect();
+    let Some(anchor) = lines.iter().rposition(|l| l.contains("../../blueprints/")) else {
+        anyhow::bail!(
+            "tpt-home-cli Cargo.toml has no blueprint dependencies to place the new one after"
+        );
     };
-    tpt_home_ui::page(
-        "<TITLE>",
-        &registry::nav_entries(),
-        "/<NAME>",
-        &view,
-        "<h2>Welcome to <TITLE></h2><p class=\"muted\">Replace this page with your UI.</p>",
-    )
+    let entry = format!("{line}{cr}");
+    lines.insert(anchor + 1, &entry);
+    Ok(lines.join("\n"))
 }
 
-fn unix_now() -> i64 {
-    std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .map(|d| d.as_secs() as i64)
-        .unwrap_or(0)
+/// Add the new crate's `__link_anchor` to the CLI's blueprint anchor list.
+fn add_link_anchor(main_src: &str, name: &str) -> anyhow::Result<String> {
+    let entry = format!("    tpt_home_bp_{name}::__link_anchor,");
+    if main_src.contains(&entry) {
+        return Ok(main_src.to_string()); // already linked
+    }
+    let cr = line_ending_suffix(main_src);
+    let mut lines: Vec<&str> = main_src.split('\n').collect();
+    let Some(anchor) = lines.iter().position(|l| {
+        l.trim_start()
+            .starts_with("tpt_home_plugins::__link_anchor")
+    }) else {
+        anyhow::bail!(
+            "tpt-home-cli main.rs has no BLUEPRINT_LINK_ANCHORS entries to place the new one before"
+        );
+    };
+    let line = format!("{entry}{cr}");
+    lines.insert(anchor, &line);
+    Ok(lines.join("\n"))
 }
-"##;
 
-fn cargo_toml_template(name: &str) -> String {
+/// `"\r"` when the text uses CRLF line endings, otherwise empty.
+fn line_ending_suffix(text: &str) -> &'static str {
+    if text.contains("\r\n") { "\r" } else { "" }
+}
+
+/// Starter code for `tpt-home new --template <kind>`. The sources are
+/// embedded in the binary, so scaffolding works offline and always matches
+/// the platform version it ships with. Each template is a small crate: its
+/// files live under `templates/<kind>/` and get the name and title filled in.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, clap::ValueEnum)]
+pub enum Template {
+    /// One table and one endpoint pair, with a placeholder page.
+    Basic,
+    /// A list-and-form app: add, view and delete records.
+    Records,
+    /// A dated log of numbers and notes, with totals and a summary.
+    Logbook,
+    /// Upload, list, download and delete files.
+    FileInbox,
+    /// A background job that writes a periodic snapshot.
+    ScheduledJob,
+    /// Metric cards built from grouped queries.
+    Dashboard,
+    /// A job that fetches a URL on a schedule and keeps the responses.
+    ScheduledFetch,
+    /// Signed sensor events in, alerts out: quiet-hours openings and silent sensors.
+    SensorAlerts,
+}
+
+/// One file of a template: its path inside the new crate and its source.
+type TemplateFile = (&'static str, &'static str);
+
+impl Template {
+    fn files(self) -> &'static [TemplateFile] {
+        match self {
+            Template::Basic => &[("src/lib.rs", include_str!("../templates/basic/src/lib.rs"))],
+            Template::Records => &[(
+                "src/lib.rs",
+                include_str!("../templates/records/src/lib.rs"),
+            )],
+            Template::Logbook => &[
+                (
+                    "src/lib.rs",
+                    include_str!("../templates/logbook/src/lib.rs"),
+                ),
+                (
+                    "src/api.rs",
+                    include_str!("../templates/logbook/src/api.rs"),
+                ),
+                (
+                    "src/page.rs",
+                    include_str!("../templates/logbook/src/page.rs"),
+                ),
+            ],
+            Template::FileInbox => &[
+                (
+                    "src/lib.rs",
+                    include_str!("../templates/file-inbox/src/lib.rs"),
+                ),
+                (
+                    "src/api.rs",
+                    include_str!("../templates/file-inbox/src/api.rs"),
+                ),
+                (
+                    "src/page.rs",
+                    include_str!("../templates/file-inbox/src/page.rs"),
+                ),
+            ],
+            Template::ScheduledJob => &[
+                (
+                    "src/lib.rs",
+                    include_str!("../templates/scheduled-job/src/lib.rs"),
+                ),
+                (
+                    "src/api.rs",
+                    include_str!("../templates/scheduled-job/src/api.rs"),
+                ),
+                (
+                    "src/page.rs",
+                    include_str!("../templates/scheduled-job/src/page.rs"),
+                ),
+            ],
+            Template::Dashboard => &[
+                (
+                    "src/lib.rs",
+                    include_str!("../templates/dashboard/src/lib.rs"),
+                ),
+                (
+                    "src/api.rs",
+                    include_str!("../templates/dashboard/src/api.rs"),
+                ),
+                (
+                    "src/page.rs",
+                    include_str!("../templates/dashboard/src/page.rs"),
+                ),
+            ],
+            Template::SensorAlerts => &[
+                (
+                    "src/lib.rs",
+                    include_str!("../templates/sensor-alerts/src/lib.rs"),
+                ),
+                (
+                    "src/api.rs",
+                    include_str!("../templates/sensor-alerts/src/api.rs"),
+                ),
+                (
+                    "src/page.rs",
+                    include_str!("../templates/sensor-alerts/src/page.rs"),
+                ),
+            ],
+            Template::ScheduledFetch => &[
+                (
+                    "src/lib.rs",
+                    include_str!("../templates/scheduled-fetch/src/lib.rs"),
+                ),
+                (
+                    "src/api.rs",
+                    include_str!("../templates/scheduled-fetch/src/api.rs"),
+                ),
+                (
+                    "src/page.rs",
+                    include_str!("../templates/scheduled-fetch/src/page.rs"),
+                ),
+            ],
+        }
+    }
+
+    /// Dependencies beyond the platform set, as `[dependencies]` lines.
+    fn extra_deps(self) -> &'static str {
+        match self {
+            Template::FileInbox => {
+                "tokio = { workspace = true }\ntokio-util = { workspace = true }\n"
+            }
+            Template::ScheduledFetch => {
+                "reqwest = { version = \"0.12\", default-features = false, features = [\"rustls-tls\"] }\n"
+            }
+            Template::SensorAlerts => "chrono = { workspace = true }\n",
+            _ => "",
+        }
+    }
+}
+
+fn cargo_toml_template(name: &str, extra_deps: &str) -> String {
     format!(
         r#"[package]
 name = "tpt-home-bp-{name}"
@@ -152,14 +258,21 @@ axum = {{ workspace = true }}
 serde = {{ workspace = true }}
 serde_json = {{ workspace = true }}
 sqlx = {{ workspace = true }}
-"#
+{extra_deps}"#
     )
 }
 
-/// `tpt-home new <name>`: create `blueprints/tpt-home-bp-<name>` and add it
-/// to the workspace members. Recompiling activates the blueprint.
-pub fn new_blueprint(name: &str) -> anyhow::Result<()> {
-    validate_name(name)?;
+/// Replace the `<NAME>`, `<TITLE>` and `<PASCAL>` placeholders in a template file.
+fn fill_placeholders(source: &str, name: &str, title: &str, pascal: &str) -> String {
+    source
+        .replace("<NAME>", name)
+        .replace("<TITLE>", title)
+        .replace("<PASCAL>", pascal)
+}
+
+/// Display title and PascalCase type name for an id: `sensor_alerts` becomes
+/// `Sensor Alerts` and `SensorAlerts`.
+fn names(name: &str) -> (String, String) {
     let title = {
         let mut s = name.split('_').map(str::to_owned).collect::<Vec<_>>();
         for part in &mut s {
@@ -173,34 +286,139 @@ pub fn new_blueprint(name: &str) -> anyhow::Result<()> {
         .chars()
         .filter(|c| c.is_ascii_alphanumeric())
         .collect();
+    (title, pascal)
+}
+
+/// `tpt-home new <name>`: create `blueprints/tpt-home-bp-<name>` and add it
+/// to the workspace members. Recompiling activates the blueprint.
+pub fn new_blueprint(name: &str, template: Template) -> anyhow::Result<()> {
+    validate_name(name)?;
+    let (title, pascal) = names(name);
 
     let root = find_workspace_root()?;
     let dir = root.join("blueprints").join(format!("tpt-home-bp-{name}"));
     if dir.exists() {
         anyhow::bail!("{} already exists", dir.display());
     }
-    let src = dir.join("src");
-    std::fs::create_dir_all(&src)?;
+    std::fs::create_dir_all(&dir)?;
 
-    let lib = LIB_TEMPLATE
-        .replace("<NAME>", name)
-        .replace("<TITLE>", &title)
-        .replace("<PASCAL>", &pascal);
-    std::fs::write(dir.join("Cargo.toml"), cargo_toml_template(name))?;
-    std::fs::write(src.join("lib.rs"), lib)?;
+    for (path, source) in template.files() {
+        let target = dir.join(path);
+        if let Some(parent) = target.parent() {
+            std::fs::create_dir_all(parent)?;
+        }
+        let text = fill_placeholders(source, name, &title, &pascal);
+        std::fs::write(&target, text)?;
+    }
+    std::fs::write(
+        dir.join("Cargo.toml"),
+        cargo_toml_template(name, template.extra_deps()),
+    )?;
 
     let manifest_path = root.join("Cargo.toml");
     let manifest = std::fs::read_to_string(&manifest_path).context("read root Cargo.toml")?;
     let updated = add_member(&manifest, &format!("blueprints/tpt-home-bp-{name}"))?;
     std::fs::write(&manifest_path, updated)?;
 
+    // Link the crate into the binary: a CLI dependency plus a link anchor.
+    let cli_dir = root.join("crates").join("tpt-home-cli");
+    let cli_manifest_path = cli_dir.join("Cargo.toml");
+    let cli_manifest =
+        std::fs::read_to_string(&cli_manifest_path).context("read tpt-home-cli Cargo.toml")?;
+    std::fs::write(&cli_manifest_path, add_cli_dependency(&cli_manifest, name)?)?;
+    let main_path = cli_dir.join("src").join("main.rs");
+    let main_src = std::fs::read_to_string(&main_path).context("read tpt-home-cli main.rs")?;
+    std::fs::write(&main_path, add_link_anchor(&main_src, name)?)?;
+
     println!("created {}", dir.display());
-    println!("registered in {}", manifest_path.display());
+    println!(
+        "registered in {} and linked into tpt-home-cli",
+        manifest_path.display()
+    );
     println!();
     println!("Next steps:");
     println!("  1. cargo build");
     println!("  2. Add your tables, routes and UI to the crate.");
     println!("  3. tpt-home run  — '{}' appears in the sidebar.", title);
+    Ok(())
+}
+
+/// Starter files for `tpt-home new --plugin <name>`, in `plugins/<name>/`.
+/// `Cargo.toml` is generated (see `plugin_cargo_toml`), the rest are below.
+const PLUGIN_FILES: &[TemplateFile] = &[
+    (
+        "plugin.toml",
+        include_str!("../templates/plugin/plugin.toml"),
+    ),
+    ("src/lib.rs", include_str!("../templates/plugin/src/lib.rs")),
+];
+
+fn plugin_cargo_toml(name: &str) -> String {
+    format!(
+        r#"[package]
+name = "tpt-home-plugin-{name}"
+description = "tpt-homestack plugin: {name}"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+publish = false
+
+[lib]
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+tpt-home-plugin-sdk = {{ path = "../../crates/tpt-home-plugin-sdk", version = "0.1.0" }}
+serde = {{ workspace = true }}
+serde_json = {{ workspace = true }}
+"#
+    )
+}
+
+/// `tpt-home new --plugin <name>`: create `plugins/<name>`, a WASM plugin
+/// built against the SDK, and add it to the workspace. Plugins are not linked
+/// into the binary: the server loads them from a `.tptp` package, so nothing
+/// in the CLI changes.
+pub fn new_plugin(name: &str) -> anyhow::Result<()> {
+    validate_name(name)?;
+    let (title, pascal) = names(name);
+
+    let root = find_workspace_root()?;
+    let dir = root.join("plugins").join(name);
+    if dir.exists() {
+        anyhow::bail!("{} already exists", dir.display());
+    }
+    std::fs::create_dir_all(dir.join("src"))?;
+    for (path, source) in PLUGIN_FILES {
+        std::fs::write(
+            dir.join(path),
+            fill_placeholders(source, name, &title, &pascal),
+        )?;
+    }
+    std::fs::write(dir.join("Cargo.toml"), plugin_cargo_toml(name))?;
+
+    let manifest_path = root.join("Cargo.toml");
+    let manifest = std::fs::read_to_string(&manifest_path).context("read root Cargo.toml")?;
+    std::fs::write(
+        &manifest_path,
+        add_member(&manifest, &format!("plugins/{name}"))?,
+    )?;
+
+    let crate_name = format!("tpt-home-plugin-{name}");
+    let wasm_name = crate_name.replace('-', "_");
+    println!("created {}", dir.display());
+    println!("registered in {}", manifest_path.display());
+    println!();
+    println!("Next steps:");
+    println!("  1. rustup target add wasm32-unknown-unknown");
+    println!("  2. cargo build -p {crate_name} --target wasm32-unknown-unknown --release");
+    println!(
+        "  3. copy target/wasm32-unknown-unknown/release/{wasm_name}.wasm to {}/plugin.wasm",
+        dir.display()
+    );
+    println!("  4. tpt-home plugin build {}", dir.display());
+    println!("  5. tpt-home plugin install <id>-<version>.tptp --approve db --enable");
     Ok(())
 }
 
@@ -239,6 +457,70 @@ mod tests {
     }
 
     #[test]
+    fn every_template_fills_all_placeholders() {
+        use clap::ValueEnum;
+        for template in Template::value_variants() {
+            for (path, source) in template.files() {
+                let out = fill_placeholders(source, "demo", "Demo", "Demo");
+                for placeholder in ["<NAME>", "<TITLE>", "<PASCAL>"] {
+                    assert!(
+                        !out.contains(placeholder),
+                        "{template:?} {path} left {placeholder}"
+                    );
+                }
+            }
+            let lib = fill_placeholders(template.files()[0].1, "demo", "Demo", "Demo");
+            assert!(
+                lib.contains("#[blueprint("),
+                "{template:?} lib.rs has no blueprint"
+            );
+            assert!(
+                lib.contains("__link_anchor"),
+                "{template:?} lib.rs has no link anchor"
+            );
+        }
+    }
+
+    #[test]
+    fn cli_dependency_is_added_after_existing_blueprints() {
+        let manifest = "[dependencies]\n\
+            tpt-home-bp-track = { path = \"../../blueprints/tpt-home-bp-track\", version = \"0.1.0\" }\n\
+            tpt-home-plugins = { path = \"../tpt-home-plugins\", version = \"0.1.0\" }\n";
+        let out = add_cli_dependency(manifest, "demo").unwrap();
+        let track = out.find("tpt-home-bp-track").unwrap();
+        let demo = out
+            .find("tpt-home-bp-demo = { path = \"../../blueprints/tpt-home-bp-demo\"")
+            .unwrap();
+        let plugins = out.find("tpt-home-plugins").unwrap();
+        assert!(track < demo && demo < plugins, "{out}");
+
+        // Idempotent.
+        assert_eq!(add_cli_dependency(&out, "demo").unwrap(), out);
+    }
+
+    #[test]
+    fn link_anchor_is_added_before_plugins() {
+        let src = "static X: &[fn() -> &'static str] = &[\n    tpt_home_bp_track::__link_anchor,\n    tpt_home_plugins::__link_anchor,\n];\n";
+        let out = add_link_anchor(src, "demo").unwrap();
+        assert!(
+            out.contains(
+                "    tpt_home_bp_demo::__link_anchor,\n    tpt_home_plugins::__link_anchor,"
+            ),
+            "{out}"
+        );
+        assert_eq!(add_link_anchor(&out, "demo").unwrap(), out);
+    }
+
+    #[test]
+    fn crlf_files_keep_their_line_endings() {
+        let manifest =
+            "[dependencies]\r\ntpt-home-bp-track = { path = \"../../blueprints/x\" }\r\n";
+        let out = add_cli_dependency(manifest, "demo").unwrap();
+        assert_eq!(out.matches("\r\n").count(), 3, "{out:?}");
+        assert!(!out.replace("\r\n", "").contains('\n'), "{out:?}");
+    }
+
+    #[test]
     fn member_insertion() {
         let manifest = "[workspace]\nmembers = [\n    \"crates/tpt-home-core\",\n]\n";
         let out = add_member(manifest, "blueprints/tpt-home-bp-demo").unwrap();
@@ -253,5 +535,20 @@ mod tests {
         let single = "[workspace]\nmembers = [\"a\"]\n";
         let out2 = add_member(single, "b").unwrap();
         assert!(out2.contains("\"b\","));
+    }
+
+    #[test]
+    fn plugin_template_fills_placeholders_and_parses() {
+        for (path, source) in PLUGIN_FILES {
+            let text = fill_placeholders(source, "demo", "Demo", "Demo");
+            for placeholder in ["<NAME>", "<TITLE>", "<PASCAL>"] {
+                assert!(!text.contains(placeholder), "{path} left {placeholder}");
+            }
+        }
+        let manifest = fill_placeholders(PLUGIN_FILES[0].1, "demo", "Demo", "Demo");
+        let parsed = tpt_home_plugins::manifest::parse(&manifest).expect("manifest parses");
+        assert_eq!(parsed.plugin.id, "demo");
+        assert_eq!(parsed.plugin.entry, "plugin.wasm");
+        assert_eq!(parsed.tables[0].name, "items");
     }
 }

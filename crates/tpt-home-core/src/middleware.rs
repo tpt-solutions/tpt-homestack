@@ -112,11 +112,17 @@ pub async fn role_guard(req: Request, next: Next, required: &'static str) -> Res
     }
 }
 
+/// Header a client must send with multipart uploads; any value works.
+pub const REQUEST_HEADER: &str = "x-tpt-request";
+
 /// Defense-in-depth CSRF guard: state-changing `/api` calls must carry
-/// `Content-Type: application/json` (or `multipart/form-data` for uploads).
-/// Cross-site HTML forms cannot set that header without a CORS preflight,
-/// which is not granted by default. `SameSite=Lax` cookies are the primary
-/// line of defense; this is the second.
+/// `Content-Type: application/json`, `multipart/form-data` (uploads, which also
+/// need the `X-TPT-Request` header) or `text/csv` (imports). HTML forms can
+/// only send `text/plain`, urlencoded or multipart bodies, and any other type
+/// from another origin needs a CORS preflight, which is not granted by default.
+/// JSON and CSV are therefore safe; multipart is safe because a form cannot
+/// set the custom header. `SameSite=Lax` cookies are the primary line of
+/// defense; this is the second.
 pub async fn csrf_guard(req: Request, next: Next) -> Response {
     let mutating = !matches!(
         req.method(),
@@ -135,10 +141,23 @@ pub async fn csrf_guard(req: Request, next: Next) -> Response {
                     .to_ascii_lowercase()
             })
             .unwrap_or_default();
-        if ct != "application/json" && ct != "multipart/form-data" {
+        if !matches!(
+            ct.as_str(),
+            "application/json" | "multipart/form-data" | "text/csv"
+        ) {
             return (
                 StatusCode::UNSUPPORTED_MEDIA_TYPE,
-                "{\"error\":\"Content-Type must be application/json (or multipart/form-data)\"}",
+                "{\"error\":\"Content-Type must be application/json, multipart/form-data or text/csv\"}",
+            )
+                .into_response();
+        }
+        // A cross-site HTML form can send multipart without a preflight, but
+        // it cannot set a custom header. Requiring one closes that gap even
+        // where SameSite cookies are not enforced.
+        if ct == "multipart/form-data" && !req.headers().contains_key(REQUEST_HEADER) {
+            return (
+                StatusCode::UNSUPPORTED_MEDIA_TYPE,
+                "{\"error\":\"multipart requests must send the X-TPT-Request header\"}",
             )
                 .into_response();
         }
@@ -147,25 +166,78 @@ pub async fn csrf_guard(req: Request, next: Next) -> Response {
 }
 
 /// Add standard security headers to every response.
+/// Largest HTML page whose scripts are rewritten with a nonce. Pages are small
+/// server-rendered strings; anything larger is refused rather than buffered.
+const MAX_HTML_BYTES: usize = 8 * 1024 * 1024;
+
+/// Policy for responses that carry no page script. Scripts must come from this
+/// origin; inline scripts and inline event handlers are refused.
+const STATIC_CSP: &str = "default-src 'self'; script-src 'self'; style-src 'self'; \
+     img-src 'self' data:; object-src 'none'; base-uri 'self'; form-action 'self'; \
+     frame-ancestors 'none'";
+
+/// Security headers on every response. An HTML page gets a fresh nonce: its
+/// `<script>` tags carry it, and the policy allows only those scripts, so
+/// inline script injected into a page does not run.
+///
+/// Styles get the same treatment: the shell's `<style>` element carries the
+/// nonce, and there are no `style=` attributes, so `'unsafe-inline'` is not
+/// allowed for styles either.
 pub async fn security_headers(req: Request, next: Next) -> Response {
-    let mut res = next.run(req).await;
-    let headers = res.headers_mut();
-    headers.insert(
+    let nonce = uuid::Uuid::new_v4().simple().to_string();
+    let res = next.run(req).await;
+    let (mut parts, body) = res.into_parts();
+
+    let is_html = parts
+        .headers
+        .get(header::CONTENT_TYPE)
+        .and_then(|v| v.to_str().ok())
+        .is_some_and(|ct| ct.starts_with("text/html"));
+    // Downloads are attachments of user-uploaded files; never rewrite them.
+    let is_download = parts.headers.contains_key(header::CONTENT_DISPOSITION);
+
+    let mut csp = STATIC_CSP.to_string();
+    let body = if is_html && !is_download {
+        match axum::body::to_bytes(body, MAX_HTML_BYTES).await {
+            Ok(bytes) => match std::str::from_utf8(&bytes) {
+                Ok(text) => {
+                    csp = format!(
+                        "default-src 'self'; script-src 'self' 'nonce-{nonce}'; \
+                         style-src 'self' 'nonce-{nonce}'; img-src 'self' data:; \
+                         object-src 'none'; base-uri 'self'; form-action 'self'; \
+                         frame-ancestors 'none'"
+                    );
+                    // The length changes with the nonce, so the old header goes.
+                    parts.headers.remove(header::CONTENT_LENGTH);
+                    axum::body::Body::from(
+                        text.replace("<script>", &format!("<script nonce=\"{nonce}\">"))
+                            .replace("<style>", &format!("<style nonce=\"{nonce}\">")),
+                    )
+                }
+                Err(_) => axum::body::Body::from(bytes),
+            },
+            Err(_) => {
+                return (StatusCode::INTERNAL_SERVER_ERROR, "page too large").into_response();
+            }
+        }
+    } else {
+        body
+    };
+
+    parts.headers.insert(
         "X-Content-Type-Options",
         HeaderValue::from_static("nosniff"),
     );
-    headers.insert("X-Frame-Options", HeaderValue::from_static("DENY"));
-    headers.insert("Referrer-Policy", HeaderValue::from_static("no-referrer"));
-    // Inline script/style is required by the server-rendered shell for now;
-    // tightened CSP when the asset pipeline lands (Phase 3/7).
-    headers.insert(
-        "Content-Security-Policy",
-        HeaderValue::from_static(
-            "default-src 'self'; script-src 'self' 'unsafe-inline'; \
-             style-src 'self' 'unsafe-inline'; img-src 'self' data:",
-        ),
-    );
-    res
+    parts
+        .headers
+        .insert("X-Frame-Options", HeaderValue::from_static("DENY"));
+    parts
+        .headers
+        .insert("Referrer-Policy", HeaderValue::from_static("no-referrer"));
+    if let Ok(value) = HeaderValue::from_str(&csp) {
+        parts.headers.insert("Content-Security-Policy", value);
+    }
+    Response::from_parts(parts, body)
 }
 
 /// Attach a unique request id and a tracing span to each request.
@@ -193,8 +265,27 @@ pub struct RateLimiter {
 
 struct LimiterInner {
     max: u32,
+    /// Stricter cap for the login bucket (`/api/auth/login`, `/api/setup`).
+    login_max: u32,
     window: Duration,
-    hits: Mutex<HashMap<String, (Instant, u32)>>,
+    trust_proxy: bool,
+    hits: Mutex<HitTable>,
+}
+
+/// Per-client hit counts: `(window start, hits)`, plus when stale entries were
+/// last removed.
+struct HitTable {
+    counts: HashMap<String, (Instant, u32)>,
+    pruned_at: Instant,
+}
+
+impl HitTable {
+    fn new() -> Mutex<Self> {
+        Mutex::new(Self {
+            counts: HashMap::new(),
+            pruned_at: Instant::now(),
+        })
+    }
 }
 
 impl RateLimiter {
@@ -202,36 +293,73 @@ impl RateLimiter {
         Self {
             inner: Arc::new(LimiterInner {
                 max,
+                login_max: LOGIN_MAX_DEFAULT,
                 window,
-                hits: Mutex::new(HashMap::new()),
+                trust_proxy: false,
+                hits: HitTable::new(),
             }),
         }
     }
 
-    /// Record a hit for `key`; `false` means over the limit.
+    /// Key clients by `X-Forwarded-For` instead of the socket peer. Only set
+    /// this when a reverse proxy you control is the sole way to reach the
+    /// server; otherwise any client can spoof the header to dodge the limit.
+    pub fn trust_proxy(self, trust: bool) -> Self {
+        let inner = &*self.inner;
+        Self {
+            inner: Arc::new(LimiterInner {
+                max: inner.max,
+                login_max: inner.login_max,
+                window: inner.window,
+                trust_proxy: trust,
+                hits: HitTable::new(),
+            }),
+        }
+    }
+
+    /// Record a hit for `key`; `false` means over the general limit.
     pub fn check(&self, key: &str) -> bool {
-        let mut hits = self.inner.hits.lock().unwrap_or_else(|e| e.into_inner());
+        self.check_with_max(key, self.inner.max)
+    }
+
+    /// Record a hit for `key` against an explicit cap; `false` means over it.
+    fn check_with_max(&self, key: &str, max: u32) -> bool {
+        let mut table = self.inner.hits.lock().unwrap_or_else(|e| e.into_inner());
         let now = Instant::now();
-        hits.retain(|_, (start, _)| now.duration_since(*start) < self.inner.window);
-        let entry = hits.entry(key.to_string()).or_insert((now, 0));
+        // Removing stale clients scans the whole table, so it runs once per
+        // window rather than on every request. An old entry is still reset when
+        // its client next appears, so the limit does not change.
+        if now.duration_since(table.pruned_at) >= self.inner.window {
+            let window = self.inner.window;
+            table
+                .counts
+                .retain(|_, (start, _)| now.duration_since(*start) < window);
+            table.pruned_at = now;
+        }
+        let entry = table.counts.entry(key.to_string()).or_insert((now, 0));
         if now.duration_since(entry.0) >= self.inner.window {
             *entry = (now, 0);
         }
         entry.1 += 1;
-        entry.1 <= self.inner.max
+        entry.1 <= max
     }
 }
 
-/// Client key for the limiter: the reverse-proxy-forwarded IP when present,
-/// otherwise the direct peer address.
-pub fn client_key(req: &Request) -> String {
-    if let Some(ip) = req
-        .headers()
-        .get("x-forwarded-for")
-        .and_then(|v| v.to_str().ok())
-        .and_then(|v| v.split(',').next())
-        .map(str::trim)
-        .filter(|v| !v.is_empty())
+/// Login and first-run setup attempts allowed per client per window. Argon2
+/// makes each guess slow, but this bound stops a steady guessing run.
+pub const LOGIN_MAX_DEFAULT: u32 = 20;
+
+/// Client key for the limiter: the direct peer address, or, when
+/// `trust_proxy` is set, the reverse-proxy-forwarded IP when present.
+pub fn client_key(req: &Request, trust_proxy: bool) -> String {
+    if trust_proxy
+        && let Some(ip) = req
+            .headers()
+            .get("x-forwarded-for")
+            .and_then(|v| v.to_str().ok())
+            .and_then(|v| v.split(',').next())
+            .map(str::trim)
+            .filter(|v| !v.is_empty())
     {
         return ip.to_string();
     }
@@ -242,8 +370,8 @@ pub fn client_key(req: &Request) -> String {
 }
 
 fn bucket_for(path: &str) -> &'static str {
-    if path.starts_with("/api/auth") || path.starts_with("/api/setup") {
-        "auth"
+    if path == "/api/auth/login" || path.starts_with("/api/setup") {
+        "login"
     } else {
         "api"
     }
@@ -251,14 +379,20 @@ fn bucket_for(path: &str) -> &'static str {
 
 /// Rate limiting middleware; use with
 /// `axum::middleware::from_fn_with_state(limiter, rate_limit_fn)`.
-/// Auth endpoints get a strict bucket, everything else a general one.
+/// Login and setup get a strict bucket, everything else the general one.
 pub async fn rate_limit_fn(
     State(limiter): State<RateLimiter>,
     req: Request,
     next: Next,
 ) -> Response {
-    let key = format!("{}:{}", bucket_for(req.uri().path()), client_key(&req));
-    if limiter.check(&key) {
+    let bucket = bucket_for(req.uri().path());
+    let key = format!("{bucket}:{}", client_key(&req, limiter.inner.trust_proxy));
+    let max = if bucket == "login" {
+        limiter.inner.login_max
+    } else {
+        limiter.inner.max
+    };
+    if limiter.check_with_max(&key, max) {
         next.run(req).await
     } else {
         let mut res = (
@@ -286,9 +420,129 @@ mod tests {
     }
 
     #[test]
+    fn forwarded_header_only_trusted_behind_proxy() {
+        let req = || {
+            Request::builder()
+                .header("x-forwarded-for", "203.0.113.9, 10.0.0.1")
+                .body(axum::body::Body::empty())
+                .unwrap()
+        };
+        assert_eq!(client_key(&req(), true), "203.0.113.9");
+        assert_eq!(client_key(&req(), false), "unknown");
+    }
+
+    #[test]
     fn bucket_selection() {
-        assert_eq!(bucket_for("/api/auth/login"), "auth");
-        assert_eq!(bucket_for("/api/setup"), "auth");
+        assert_eq!(bucket_for("/api/auth/login"), "login");
+        assert_eq!(bucket_for("/api/setup"), "login");
+        assert_eq!(bucket_for("/api/auth/me"), "api");
         assert_eq!(bucket_for("/api/notes"), "api");
     }
+
+    #[test]
+    fn login_bucket_has_its_own_cap() {
+        let rl = RateLimiter::new(240, Duration::from_secs(60));
+        for _ in 0..LOGIN_MAX_DEFAULT {
+            assert!(rl.check_with_max("login:ip", LOGIN_MAX_DEFAULT));
+        }
+        assert!(!rl.check_with_max("login:ip", LOGIN_MAX_DEFAULT));
+        assert!(rl.check("api:ip"), "the general bucket is unaffected");
+    }
+}
+
+/// With `require_https` set, plain-HTTP requests are redirected to HTTPS
+/// (GET and HEAD) or refused (other methods). See `Config::require_https`.
+/// The settings [`https_required`] needs, passed as router state.
+#[derive(Debug, Clone, Copy)]
+pub struct HttpsPolicy {
+    pub required: bool,
+    pub trust_proxy: bool,
+}
+
+pub async fn https_required(
+    State(policy): State<HttpsPolicy>,
+    req: axum::extract::Request,
+    next: Next,
+) -> Response {
+    if !policy.required || is_https(&req, policy.trust_proxy) {
+        return next.run(req).await;
+    }
+    if matches!(
+        *req.method(),
+        axum::http::Method::GET | axum::http::Method::HEAD
+    ) {
+        let host = req
+            .headers()
+            .get(header::HOST)
+            .and_then(|h| h.to_str().ok());
+        let path = req
+            .uri()
+            .path_and_query()
+            .map(|p| p.as_str())
+            .unwrap_or("/");
+        if let Some(target) = host.and_then(|h| https_location(h, path)) {
+            return (StatusCode::PERMANENT_REDIRECT, [(header::LOCATION, target)]).into_response();
+        }
+    }
+    (StatusCode::FORBIDDEN, "HTTPS is required for this server").into_response()
+}
+
+/// A request is HTTPS when a trusted proxy says so. `X-Forwarded-Proto` is
+/// believed only with `trust_proxy`, for the same reason as `X-Forwarded-For`.
+fn is_https(req: &axum::extract::Request, trust_proxy: bool) -> bool {
+    trust_proxy
+        && req
+            .headers()
+            .get("x-forwarded-proto")
+            .and_then(|v| v.to_str().ok())
+            .and_then(|v| v.split(',').next())
+            .is_some_and(|p| p.trim().eq_ignore_ascii_case("https"))
+}
+
+/// `https://<host><path>` for a redirect. Only plain host names and addresses
+/// and a path without spaces or control characters are accepted, so a crafted
+/// header cannot inject another header into the response.
+pub fn https_location(host: &str, path: &str) -> Option<String> {
+    let host_ok = !host.is_empty()
+        && host.len() <= 255
+        && host
+            .bytes()
+            .all(|b| b.is_ascii_alphanumeric() || matches!(b, b'.' | b'-' | b':' | b'[' | b']'));
+    let path_ok = path.starts_with('/') && !path.bytes().any(|b| b.is_ascii_control() || b == b' ');
+    (host_ok && path_ok).then(|| format!("https://{host}{path}"))
+}
+
+#[cfg(test)]
+mod https_tests {
+    use super::*;
+
+    #[test]
+    fn redirects_only_to_well_formed_hosts_and_paths() {
+        assert_eq!(
+            https_location("home.example.com", "/notes?id=1").as_deref(),
+            Some("https://home.example.com/notes?id=1")
+        );
+        assert_eq!(
+            https_location("192.168.1.5:8080", "/").as_deref(),
+            Some("https://192.168.1.5:8080/")
+        );
+        assert!(https_location("evil.com\r\nSet-Cookie: x", "/").is_none());
+        assert!(https_location("", "/").is_none());
+        assert!(https_location("ok.example", "no-slash").is_none());
+        assert!(https_location("ok.example", "/a b").is_none());
+    }
+}
+
+/// A route layer that admits only admins. Use it on hand-written
+/// `RouteEntry` registrations: `router.route(path, get(h).layer(admin_only!()))`.
+/// The `#[bp_route(..., role = "admin")]` macro applies the same guard itself.
+#[macro_export]
+macro_rules! admin_only {
+    () => {
+        axum::middleware::from_fn(
+            |req: axum::extract::Request, next: axum::middleware::Next| {
+                $crate::middleware::role_guard(req, next, "admin")
+            },
+        )
+    };
 }

@@ -5,6 +5,7 @@
 //! sessions.
 
 pub mod api_token;
+pub mod lockout;
 pub mod password;
 pub mod session;
 pub mod user;

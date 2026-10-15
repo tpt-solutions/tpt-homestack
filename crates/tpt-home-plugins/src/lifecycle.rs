@@ -37,6 +37,37 @@ inventory::submit! {
 
 inventory::submit! {
     tpt_home_core::MigrationEntry {
+        key: "tpt-home-plugins:004_notification_channels",
+        sql: r#"
+            CREATE TABLE IF NOT EXISTS notification_channels (
+                name         TEXT    PRIMARY KEY,
+                url          TEXT    NOT NULL,
+                created_at   INTEGER NOT NULL,
+                last_sent_at INTEGER,
+                last_error   TEXT
+            );
+        "#,
+    }
+}
+
+inventory::submit! {
+    tpt_home_core::MigrationEntry {
+        key: "tpt-home-plugins:003_plugin_hooks",
+        sql: r#"
+            CREATE TABLE IF NOT EXISTS plugin_hooks (
+                plugin_id        TEXT    NOT NULL,
+                name             TEXT    NOT NULL,
+                secret           TEXT    NOT NULL,
+                created_at       INTEGER NOT NULL,
+                last_received_at INTEGER,
+                PRIMARY KEY (plugin_id, name)
+            );
+        "#,
+    }
+}
+
+inventory::submit! {
+    tpt_home_core::MigrationEntry {
         key: "tpt-home-plugins:002_plugin_migrations",
         sql: r#"
             CREATE TABLE IF NOT EXISTS plugin_migrations (
@@ -452,6 +483,12 @@ pub async fn uninstall(db: &SqlitePool, id: &str, keep_data: bool) -> Result<u32
         .bind(id)
         .execute(db)
         .await?;
+    // Signing secrets go even when data is kept: a removed plugin must not
+    // keep accepting signed requests.
+    sqlx::query("DELETE FROM plugin_hooks WHERE plugin_id = ?1")
+        .bind(id)
+        .execute(db)
+        .await?;
 
     let dropped = if keep_data {
         0
@@ -483,4 +520,23 @@ pub fn stage_package(archive: &[u8]) -> Result<(PathBuf, PluginManifest), anyhow
         }
     };
     Ok((staging, manifest))
+}
+
+inventory::submit! {
+    tpt_home_core::MigrationEntry {
+        key: "tpt-home-plugins:005_email_settings",
+        sql: r#"
+            CREATE TABLE IF NOT EXISTS email_settings (
+                id          INTEGER PRIMARY KEY CHECK (id = 1),
+                host        TEXT    NOT NULL,
+                port        INTEGER NOT NULL,
+                security    TEXT    NOT NULL,
+                username    TEXT    NOT NULL DEFAULT '',
+                password    TEXT    NOT NULL DEFAULT '',
+                from_addr   TEXT    NOT NULL,
+                to_addr     TEXT    NOT NULL,
+                updated_at  INTEGER NOT NULL
+            );
+        "#,
+    }
 }

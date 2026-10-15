@@ -13,6 +13,8 @@ use tpt_home_core::prelude::*;
 use tpt_home_macros::{blueprint, bp_migration, bp_route, bp_ui_route};
 
 pub mod api;
+pub mod csv_io;
+pub mod mcp;
 pub mod page;
 
 /// Track blueprint metadata.
@@ -99,6 +101,49 @@ async fn delete_row(
 ) -> Result<impl IntoResponse, ApiError> {
     api::delete_row(&db, id, row).await?;
     Ok(Json(serde_json::json!({ "ok": true })))
+}
+
+/// GET /api/track/tables/{id}/export.csv: the table as CSV, one row per line.
+#[bp_route(get, "/api/track/tables/{id}/export.csv")]
+async fn export_csv(
+    State(db): State<DbPool>,
+    axum::extract::Path(id): axum::extract::Path<i64>,
+) -> Result<axum::response::Response, ApiError> {
+    let (name, text) = csv_io::export(&db, id).await?;
+    let filename = format!("{}.csv", tpt_home_core::files::sanitize_filename(&name));
+    Ok((
+        [
+            (
+                axum::http::header::CONTENT_TYPE,
+                "text/csv; charset=utf-8".to_string(),
+            ),
+            (
+                axum::http::header::CONTENT_DISPOSITION,
+                format!("attachment; filename=\"{filename}\""),
+            ),
+        ],
+        text,
+    )
+        .into_response())
+}
+
+/// POST /api/track/tables/{id}/import: CSV in the request body (up to 1 MiB).
+/// All rows are checked first; if any is bad, nothing is saved.
+#[bp_route(post, "/api/track/tables/{id}/import")]
+async fn import_csv(
+    State(db): State<DbPool>,
+    axum::extract::Path(id): axum::extract::Path<i64>,
+    body: axum::body::Bytes,
+) -> Result<impl IntoResponse, ApiError> {
+    let text = std::str::from_utf8(&body)
+        .map_err(|_| ApiError::bad_request("the file must be UTF-8 text"))?;
+    // Spreadsheet programs often prepend a byte-order mark.
+    let text = text.trim_start_matches('\u{feff}');
+    let imported = csv_io::import(&db, id, text).await?;
+    Ok((
+        axum::http::StatusCode::CREATED,
+        Json(serde_json::json!({ "imported": imported })),
+    ))
 }
 
 #[bp_ui_route("/track", name = "Track")]

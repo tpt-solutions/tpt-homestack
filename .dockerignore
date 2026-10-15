@@ -1,0 +1,7 @@
+target
+target-*
+data
+backups
+.git
+**/node_modules
+docs/screenshots

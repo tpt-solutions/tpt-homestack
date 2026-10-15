@@ -38,12 +38,12 @@ pub struct CreateTable {
     pub fields: Vec<FieldInput>,
 }
 
-fn data_table(table_id: i64) -> String {
+pub(crate) fn data_table(table_id: i64) -> String {
     // Integer from our own PK — cannot contain SQL syntax.
     format!("track_data_{table_id}")
 }
 
-fn col(field_id: i64) -> String {
+pub(crate) fn col(field_id: i64) -> String {
     format!("f_{field_id}")
 }
 
@@ -73,7 +73,7 @@ async fn load_fields(db: &SqlitePool, table_id: i64) -> Result<Vec<FieldRow>, Ap
     Ok(fields)
 }
 
-async fn load_table(db: &SqlitePool, table_id: i64) -> Result<TableDef, ApiError> {
+pub(crate) async fn load_table(db: &SqlitePool, table_id: i64) -> Result<TableDef, ApiError> {
     let (id, name): (i64, String) =
         sqlx::query_as("SELECT id, name FROM track_tables WHERE id = ?1")
             .bind(table_id)

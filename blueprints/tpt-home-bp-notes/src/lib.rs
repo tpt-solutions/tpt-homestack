@@ -11,6 +11,7 @@ use tpt_home_core::prelude::*;
 use tpt_home_macros::{blueprint, bp_migration, bp_route, bp_ui_route};
 
 pub mod api;
+pub mod mcp;
 pub mod page;
 pub mod safe_render;
 

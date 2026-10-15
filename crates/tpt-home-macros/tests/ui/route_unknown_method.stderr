@@ -1,0 +1,5 @@
+error: unsupported HTTP method (use get/post/put/delete/patch/head/options/trace)
+ --> tests/ui/route_unknown_method.rs:3:12
+  |
+3 | #[bp_route(fetch, "/api/notes")]
+  |            ^^^^^

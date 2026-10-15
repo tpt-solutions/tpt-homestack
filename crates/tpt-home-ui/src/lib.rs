@@ -8,6 +8,7 @@
 //! (Phase 3): the api crate only calls [`page`], [`login_page`] and friends,
 //! so the rendering backend can change without touching routing.
 
+pub mod components;
 mod view;
 
 pub use view::{UserRow, UserView};
@@ -89,14 +90,75 @@ pre.md { background:var(--bg); border:1px solid var(--line); border-radius:8px;
   .sidebar { width:auto; flex:none; border-right:0; border-bottom:1px solid var(--line); }
   .main { padding:16px; }
 }
+/* Utility classes. Pages use these instead of style attributes, so the
+   Content-Security-Policy can refuse inline styles. */
+.mt0 { margin-top:0; } .m0 { margin:0; } .mt6 { margin-top:6px; }
+.mt8 { margin-top:8px; } .mt14 { margin-top:14px; }
+.scroll-x { overflow-x:auto; } .span-all { grid-column:1/-1; }
+.w200 { max-width:200px; } .w420 { max-width:420px; } .w480 { max-width:480px; }
+.between { justify-content:space-between; }
+.form-grid { display:grid; gap:8px; max-width:520px; }
+.brand-line { font-weight:700; font-size:20px; margin-bottom:16px; }
+.big-number { font-size:28px; font-weight:600; margin-top:4px; }
+.health-grid { display:grid; grid-template-columns:repeat(auto-fit,minmax(160px,1fr)); gap:14px; }
+.cards-grid { display:grid; grid-template-columns:repeat(auto-fit,minmax(160px,1fr)); gap:12px; }
+.label-block { display:block; margin:8px 0; }
+.s-max-width-340px { max-width:340px; }
+.s-display-none { display:none; }
+.s-margin-top-12px { margin-top:12px; }
+.s-max-width-280px { max-width:280px; }
+.s-max-width-140px { max-width:140px; }
+.s-margin-top-10px { margin-top:10px; }
+.s-max-width-170px { max-width:170px; }
+.s-gap-8px-flex-wrap-wrap { gap:8px;flex-wrap:wrap; }
+.s-max-width-240px { max-width:240px; }
+.s-max-width-160px { max-width:160px; }
+.s-display-flex-flex-wrap-wrap-gap-16px { display:flex;flex-wrap:wrap;gap:16px; }
+.s-margin-top-16px { margin-top:16px; }
+.s-flex-1-1-220px-max-width-300px-margin-0 { flex:1 1 220px;max-width:300px;margin:0; }
+.s-font-size-2em-font-weight-600 { font-size:2em;font-weight:600; }
+.s-gap-24px { gap:24px; }
+.s-max-width-220px { max-width:220px; }
+.s-white-space-pre-wrap { white-space:pre-wrap; }
+.s-white-space-pre-wrap-max-height-8em-overflow-auto { white-space:pre-wrap;max-height:8em;overflow:auto; }
+.s-max-width-90px { max-width:90px; }
+.s-max-width-110px { max-width:110px; }
+"#;
+
+/// Event delegation for every page. Elements name their handler in
+/// `data-click`, `data-submit` or `data-change`, as `fn` or `fn:arg:arg`. Whole
+/// numbers in the arguments are passed as numbers. The named global function is
+/// called with those arguments, then the event and the element. Returning
+/// `false` cancels the default action. Pages use this
+/// instead of inline `onclick=` attributes, so the Content-Security-Policy can
+/// refuse inline handlers.
+pub const DISPATCH_JS: &str = r#"
+(function () {
+  function run(attr, e) {
+    const el = e.target instanceof Element ? e.target.closest('[' + attr + ']') : null;
+    if (!el) return;
+    const parts = el.getAttribute(attr).split(':');
+    const fn = window[parts[0]];
+    if (typeof fn !== 'function') return;
+    // Whole numbers arrive as numbers, as they did from inline handlers, so
+    // comparisons like `t.id === id` still hold.
+    const args = parts.slice(1).map((a) => (/^-?\d+$/.test(a) ? Number(a) : a));
+    if (fn.apply(el, args.concat([e, el])) === false) e.preventDefault();
+  }
+  document.addEventListener('click', (e) => run('data-click', e));
+  document.addEventListener('submit', (e) => run('data-submit', e));
+  document.addEventListener('change', (e) => run('data-change', e));
+})();
 "#;
 
 fn shell_open(title: &str) -> String {
     format!(
         "<!doctype html>\n<html lang=\"en\">\n<head>\n<meta charset=\"utf-8\">\n\
          <meta name=\"viewport\" content=\"width=device-width, initial-scale=1\">\n\
-         <title>{} · tpt-homestack</title>\n<style>{CSS}</style>\n</head>\n<body>",
-        esc(title)
+         <link rel=\"icon\" href=\"data:,\">\n\
+         <title>{} · tpt-homestack</title>\n<style>{CSS}{}</style>\n</head>\n<body>",
+        esc(title),
+        components::COMPONENTS_CSS
     )
 }
 
@@ -111,20 +173,26 @@ fn sidebar(nav: &[(String, String)], active: &str, user: &UserView) -> String {
         links.push_str(&format!("<a href=\"{path}\"{class}>{}</a>\n", esc(label)));
     }
     if user.role == "admin" {
-        let class = if active == "/admin/users" {
-            " class=\"active\""
-        } else {
-            ""
-        };
-        links.push_str(&format!(
-            "<a href=\"/admin/users\"{class}>Admin · Users</a>\n"
-        ));
+        for (path, label) in [
+            ("/admin/users", "Admin · Users"),
+            ("/admin/plugins", "Admin · Plugins"),
+            ("/admin/remote", "Admin · Remote access"),
+            ("/admin/jobs", "Admin · Jobs"),
+            ("/admin/status", "Admin · Status"),
+        ] {
+            let class = if active == path {
+                " class=\"active\""
+            } else {
+                ""
+            };
+            links.push_str(&format!("<a href=\"{path}\"{class}>{label}</a>\n"));
+        }
     }
     links.push_str("</nav>");
     format!(
         "<aside class=\"sidebar\">\n<div class=\"brand\">tpt-homestack</div>\n{links}\n\
          <div class=\"who\">signed in as <strong>{}</strong> <span class=\"badge\">{}</span><br>\
-         <a href=\"/settings\">Settings</a><a href=\"#\" onclick=\"logout();return false\">Sign out</a></div>\n</aside>",
+         <a href=\"/settings\">Settings</a><a href=\"#\" data-click=\"logout\">Sign out</a></div>\n</aside>",
         esc(&user.username),
         esc(&user.role)
     )
@@ -138,21 +206,23 @@ pub fn page(
     user: &UserView,
     content: &str,
 ) -> String {
+    let toasts = components::toast_region();
     format!(
-        "{}\n<div class=\"layout\">\n{}\n<main class=\"main\">\n<h1>{}</h1>\n{}\n</main>\n</div>\n<script>\n\
+        "{}\n<div class=\"layout\">\n{}\n<main class=\"main\">\n<h1>{}</h1>\n{}\n</main>\n</div>\n{toasts}\n<script>\n\
          async function postJson(url, body) {{\n  const r = await fetch(url, {{method:'POST', headers:{{'Content-Type':'application/json'}}, body: JSON.stringify(body)}});\n  const j = await r.json().catch(() => ({{}}));\n  if (!r.ok) throw new Error(j.error || r.statusText);\n  return j;\n}}\n\
-         async function logout() {{ await postJson('/api/auth/logout', {{}}); location.href = '/login'; }}\n</script>\n</body>\n</html>",
+         function logout() {{ postJson('/api/auth/logout', {{}}).finally(() => location.href = '/login'); return false; }}\n{DISPATCH_JS}{}</script>\n</body>\n</html>",
         shell_open(title),
         sidebar(nav, active, user),
         esc(title),
-        content
+        content,
+        components::COMPONENTS_JS
     )
 }
 
 /// Standalone (no-shell) page used for login and first-run setup.
 pub fn bare_page(title: &str, body: &str) -> String {
     format!(
-        "{}\n<div class=\"center\">\n<div class=\"brand\" style=\"font-weight:700;font-size:20px;margin-bottom:16px\">tpt-homestack</div>\n{}\n</div>\n</body>\n</html>",
+        "{}\n<div class=\"center\">\n<div class=\"brand brand-line\">tpt-homestack</div>\n{}\n</div>\n<script>{DISPATCH_JS}</script>\n</body>\n</html>",
         shell_open(title),
         body
     )
@@ -164,11 +234,11 @@ pub fn login_page(error: Option<&str>) -> String {
         .map(|e| format!("<div class=\"msg error\">{}</div>", esc(e)))
         .unwrap_or_default();
     let body = format!(
-        "<div class=\"card\">\n{err}\n<h1 style=\"margin-top:0\">Sign in</h1>\n\
-         <form onsubmit=\"return doLogin(event)\">\n\
+        "<div class=\"card\">\n{err}\n<h1 class=\"mt0\">Sign in</h1>\n\
+         <form data-submit=\"doLogin\">\n\
          <label for=\"u\">Username</label><input id=\"u\" autocomplete=\"username\" required>\n\
          <label for=\"p\">Password</label><input id=\"p\" type=\"password\" autocomplete=\"current-password\" required>\n\
-         <div style=\"margin-top:14px\"><button type=\"submit\">Sign in</button></div>\n</form>\n</div>\n\
+         <div class=\"mt14\"><button type=\"submit\">Sign in</button></div>\n</form>\n</div>\n\
          <script>\nasync function doLogin(ev) {{\n  ev.preventDefault();\n  try {{\n    await postJson('/api/auth/login', {{username: document.getElementById('u').value, password: document.getElementById('p').value}});\n    location.href = '/dashboard';\n  }} catch (e) {{ location.href = '/login?error=' + encodeURIComponent(e.message); }}\n  return false;\n}}\n</script>"
     );
     bare_page("Sign in", &body)
@@ -180,12 +250,12 @@ pub fn setup_page(error: Option<&str>) -> String {
         .map(|e| format!("<div class=\"msg error\">{}</div>", esc(e)))
         .unwrap_or_default();
     let body = format!(
-        "<div class=\"card\">\n{err}\n<h1 style=\"margin-top:0\">Welcome</h1>\n\
+        "<div class=\"card\">\n{err}\n<h1 class=\"mt0\">Welcome</h1>\n\
          <p class=\"muted\">This instance has no users yet. Create the first admin account.</p>\n\
-         <form onsubmit=\"return doSetup(event)\">\n\
+         <form data-submit=\"doSetup\">\n\
          <label for=\"u\">Admin username</label><input id=\"u\" autocomplete=\"username\" required>\n\
          <label for=\"p\">Password (min 8 chars)</label><input id=\"p\" type=\"password\" autocomplete=\"new-password\" required>\n\
-         <div style=\"margin-top:14px\"><button type=\"submit\">Create admin</button></div>\n</form>\n</div>\n\
+         <div class=\"mt14\"><button type=\"submit\">Create admin</button></div>\n</form>\n</div>\n\
          <script>\nasync function doSetup(ev) {{\n  ev.preventDefault();\n  try {{\n    await postJson('/api/setup', {{username: document.getElementById('u').value, password: document.getElementById('p').value}});\n    location.href = '/dashboard';\n  }} catch (e) {{ location.href = '/setup?error=' + encodeURIComponent(e.message); }}\n  return false;\n}}\n</script>"
     );
     bare_page("Setup", &body)
@@ -214,19 +284,73 @@ pub fn dashboard_content(blueprints: &[(&str, &str)]) -> String {
 
 /// Settings page: change your own password.
 pub fn settings_content() -> String {
-    "<div class=\"card\" style=\"max-width:420px\">\n\
-     <h2 style=\"margin-top:0\">Change password</h2>\n\
-     <form onsubmit=\"return doPwChange(event)\">\n\
-     <label for=\"cur\">Current password</label><input id=\"cur\" type=\"password\" autocomplete=\"current-password\" required>\n\
-     <label for=\"new\">New password (min 8 chars)</label><input id=\"new\" type=\"password\" autocomplete=\"new-password\" required>\n\
-     <div id=\"pwmsg\"></div>\n\
-     <div style=\"margin-top:14px\"><button type=\"submit\">Update password</button></div>\n</form>\n</div>\n\
-     <script>\nasync function doPwChange(ev) {{\n  ev.preventDefault();\n  const msg = document.getElementById('pwmsg');\n  try {{\n    await postJson('/api/auth/change-password', {{current: document.getElementById('cur').value, new_password: document.getElementById('new').value}});\n    msg.innerHTML = '<div class=\"msg ok\">Password changed. Sign in again…</div>';\n    setTimeout(() => location.href = '/login', 1200);\n  }} catch (e) {{ msg.innerHTML = '<div class=\"msg error\">' + e.message + '</div>'; }}\n  return false;\n}}\n</script>"
+    // A plain literal, not a format string: braces here are real JavaScript.
+    // The script must use only what this page defines (`fetch`), and it shows
+    // server messages as text, not HTML.
+    r#"<div class="card w420">
+<h2 class="mt0">Change password</h2>
+<form data-submit="doPwChange">
+<label for="cur">Current password</label><input id="cur" type="password" autocomplete="current-password" required>
+<label for="new">New password (min 8 chars)</label><input id="new" type="password" autocomplete="new-password" required>
+<div id="pwmsg"></div>
+<div class="mt14"><button type="submit">Update password</button></div>
+</form>
+</div>
+<script>
+async function doPwChange(ev) {
+  ev.preventDefault();
+  const msg = document.getElementById('pwmsg');
+  msg.replaceChildren();
+  const box = document.createElement('div');
+  try {
+    const r = await fetch('/api/auth/change-password', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({current: document.getElementById('cur').value, new_password: document.getElementById('new').value}),
+    });
+    const j = await r.json().catch(() => ({}));
+    if (!r.ok) throw new Error(j.error || r.statusText);
+    box.className = 'msg ok';
+    box.textContent = 'Password changed. Sign in again…';
+    msg.appendChild(box);
+    setTimeout(() => location.href = '/login', 1200);
+  } catch (e) {
+    box.className = 'msg error';
+    box.textContent = e.message;
+    msg.appendChild(box);
+  }
+  return false;
+}
+</script>"#
         .to_string()
+}
+
+#[cfg(test)]
+mod settings_tests {
+    use super::*;
+
+    #[test]
+    fn settings_script_is_plain_javascript() {
+        let html = settings_content();
+        // A format-string leftover would leave doubled braces in the script.
+        assert!(!html.contains("{{") && !html.contains("}}"), "{html}");
+        // The script must not call helpers this page does not define.
+        assert!(!html.contains("postJson"), "{html}");
+        assert!(html.contains("fetch('/api/auth/change-password',"));
+    }
 }
 
 /// Admin · users page.
 pub fn users_admin_content(users: &[UserRow]) -> String {
+    let pw_modal = components::modal(
+        "pw-modal",
+        "Reset password",
+        &format!(
+            "{}\n{}",
+            components::field("New password (8+ characters)", "pw-new", "password", ""),
+            components::button("Set password", "savePw", components::ButtonKind::Primary)
+        ),
+    );
     let rows: String = users
         .iter()
         .map(|u| {
@@ -236,7 +360,7 @@ pub fn users_admin_content(users: &[UserRow]) -> String {
                 "<span class=\"badge\">active</span>".to_string()
             };
             let role_sel = format!(
-                "<select onchange=\"setRole({}, this.value)\">{}{} </select>",
+                "<select data-change=\"setRole:{}\">{}{} </select>",
                 u.id,
                 if u.role == "admin" {
                     "<option value=\"admin\" selected>admin</option><option value=\"user\">user</option>"
@@ -247,16 +371,16 @@ pub fn users_admin_content(users: &[UserRow]) -> String {
             );
             format!(
                 "<tr><td>{}</td><td>{}</td><td>{}</td><td>{}</td>\
-                 <td class=\"row\">{}<button class=\"secondary\" onclick=\"resetPw({}, prompt('new password (min 8 chars)'))\">Reset pw</button>\
-                 <button class=\"danger\" onclick=\"delUser({})\">Delete</button></td></tr>",
+                 <td class=\"row\">{}<button class=\"secondary\" data-click=\"resetPw:{}\">Reset pw</button>\
+                 <button class=\"danger\" data-click=\"delUser:{}\">Delete</button></td></tr>",
                 u.id,
                 esc(&u.username),
                 status,
                 role_sel,
                 if u.disabled {
-                    format!("<button class=\"secondary\" onclick=\"setDisabled({}, false)\">Enable</button>", u.id)
+                    format!("<button class=\"secondary\" data-click=\"setDisabled:{}:false\">Enable</button>", u.id)
                 } else {
-                    format!("<button class=\"secondary\" onclick=\"setDisabled({}, true)\">Disable</button>", u.id)
+                    format!("<button class=\"secondary\" data-click=\"setDisabled:{}:true\">Disable</button>", u.id)
                 },
                 u.id,
                 u.id
@@ -264,21 +388,244 @@ pub fn users_admin_content(users: &[UserRow]) -> String {
         })
         .collect();
     format!(
-        "<div class=\"card\">\n<h2 style=\"margin-top:0\">Create user</h2>\n\
-         <form onsubmit=\"return doCreate(event)\">\n\
-         <div class=\"row\"><input id=\"nu\" placeholder=\"username\" style=\"max-width:200px\" required>\n\
-         <input id=\"np\" type=\"password\" placeholder=\"password\" style=\"max-width:200px\" required>\n\
+        "<div class=\"card\">\n<h2 class=\"mt0\">Create user</h2>\n\
+         <form data-submit=\"doCreate\">\n\
+         <div class=\"row\"><input id=\"nu\" placeholder=\"username\" required class=\"w200\">\n\
+         <input id=\"np\" type=\"password\" placeholder=\"password\" required class=\"w200\">\n\
          <select id=\"nr\"><option value=\"user\">user</option><option value=\"admin\">admin</option></select>\n\
          <button type=\"submit\">Create</button></div>\n</form>\n</div>\n\
          <div class=\"card\">\n<table>\n<thead><tr><th>#</th><th>User</th><th>Status</th><th>Role</th><th>Actions</th></tr></thead>\n\
-         <tbody>{rows}</tbody>\n</table>\n</div>\n\
+         <tbody>{rows}</tbody>\n</table>\n</div>\n{pw_modal}\n\
          <script>\nasync function api(url, method, body) {{\n  const r = await fetch(url, {{method, headers:{{'Content-Type':'application/json'}}, body: body ? JSON.stringify(body) : undefined}});\n  const j = await r.json().catch(() => ({{}}));\n  if (!r.ok) throw new Error(j.error || r.statusText);\n  return j;\n}}\n\
-         function reload() {{ location.reload(); }}\nasync function doCreate(ev) {{ ev.preventDefault(); try {{ await api('/api/admin/users', 'POST', {{username: nu.value, password: np.value, role: nr.value}}); reload(); }} catch (e) {{ alert(e.message); }} return false; }}\n\
-         async function setRole(id, role) {{ try {{ await api('/api/admin/users/' + id, 'PATCH', {{role}}); reload(); }} catch (e) {{ alert(e.message); }} }}\n\
-         async function setDisabled(id, disabled) {{ try {{ await api('/api/admin/users/' + id, 'PATCH', {{disabled}}); reload(); }} catch (e) {{ alert(e.message); }} }}\n\
-         async function resetPw(id, pw) {{ if (!pw || pw.length < 8) return; try {{ await api('/api/admin/users/' + id, 'PATCH', {{password: pw}}); alert('password updated'); }} catch (e) {{ alert(e.message); }} }}\n\
-         async function delUser(id) {{ if (!confirm('Delete user ' + id + '?')) return; try {{ await api('/api/admin/users/' + id, 'DELETE'); reload(); }} catch (e) {{ alert(e.message); }} }}\n</script>"
+         function reload() {{ location.reload(); }}\nasync function doCreate(ev) {{ ev.preventDefault(); try {{ await api('/api/admin/users', 'POST', {{username: nu.value, password: np.value, role: nr.value}}); reload(); }} catch (e) {{ toast(e.message, false); }} return false; }}\n\
+         async function setRole(id, ev, el) {{ try {{ await api('/api/admin/users/' + id, 'PATCH', {{role: el.value}}); reload(); }} catch (e) {{ toast(e.message, false); }} }}\n\
+         async function setDisabled(id, flag) {{ try {{ await api('/api/admin/users/' + id, 'PATCH', {{disabled: flag === 'true'}}); reload(); }} catch (e) {{ toast(e.message, false); }} }}\n\
+         let pwTarget = null;
+async function resetPw(id) {{ pwTarget = id; document.getElementById('pw-new').value = ''; openModal('pw-modal'); }}
+async function savePw() {{ const pw = document.getElementById('pw-new').value; if (pw.length < 8) {{ toast('password must be at least 8 characters', false); return; }} try {{ await api('/api/admin/users/' + pwTarget, 'PATCH', {{password: pw}}); closeModal('pw-modal'); toast('password updated', true); }} catch (e) {{ toast(e.message, false); }} }}
+         async function delUser(id) {{ if (!confirm('Delete user ' + id + '?')) return; try {{ await api('/api/admin/users/' + id, 'DELETE'); reload(); }} catch (e) {{ toast(e.message, false); }} }}\n</script>"
     )
+}
+
+/// Capability keys a plugin can request and an admin can approve, in the
+/// order the approval form shows them.
+pub const CAPABILITY_KEYS: [&str; 5] = ["db", "kv", "storage", "http", "notify"];
+
+/// What approving a capability lets the plugin do, in plain words. Unknown
+/// keys get a generic label so a new capability is never shown as nothing.
+pub fn capability_label(key: &str) -> &'static str {
+    match key {
+        "db" => "Keep its own records in the database (only its own tables)",
+        "kv" => "Save small settings and counters",
+        "storage" => "Store and read files in its own folder",
+        "http" => "Make web requests to the hosts it names",
+        "notify" => "Send messages to the notification channels you set up",
+        _ => "Use an unknown capability",
+    }
+}
+
+/// Admin · plugins page: install a package with plain-language approvals,
+/// then enable, disable or remove installed plugins. The table is filled from
+/// `GET /api/plugins` by the script, so the page itself holds no plugin data.
+pub fn plugins_admin_content() -> String {
+    let boxes: String = CAPABILITY_KEYS
+        .iter()
+        .map(|key| {
+            format!(
+                "<label class=\"check\"><input type=\"checkbox\" name=\"cap\" value=\"{key}\" checked> {}</label>\n",
+                esc(capability_label(key))
+            )
+        })
+        .collect();
+    let labels: serde_json::Map<String, serde_json::Value> = CAPABILITY_KEYS
+        .iter()
+        .map(|key| {
+            (
+                key.to_string(),
+                serde_json::Value::from(capability_label(key)),
+            )
+        })
+        .collect();
+    let labels = serde_json::Value::Object(labels);
+    format!(
+        "<div class=\"card\">\n<h2 class=\"mt0\">Install a plugin</h2>\n\
+         <form data-submit=\"installPlugin\">\n\
+         <p>Choose a <code>.tptp</code> package. Only the ticked abilities are granted; the plugin is refused anything else.</p>\n\
+         <input id=\"pkg\" type=\"file\" accept=\".tptp\" required>\n\
+         <p class=\"muted\">If the publisher sent a signature file (<code>.sig</code>), choose it too. A signed package installs only when its key is trusted by this server.</p>\n\
+         <input id=\"sig\" type=\"file\" accept=\".sig,text/plain\">\n\
+         <fieldset><legend>Allow this plugin to</legend>\n{boxes}</fieldset>\n\
+         <label class=\"check\"><input type=\"checkbox\" id=\"pen\" checked> Enable after install</label>\n\
+         <button type=\"submit\">Install</button>\n</form>\n</div>\n\
+         <div class=\"card\">\n<table>\n<thead><tr><th>Plugin</th><th>Status</th><th>Allowed to</th><th>Actions</th></tr></thead>\n\
+         <tbody id=\"plugins\"><tr><td colspan=\"4\">Loading…</td></tr></tbody>\n</table>\n</div>\n\
+         <div class=\"card\">\n<div class=\"row between\"><h2 class=\"m0\">Plugin catalog</h2>\
+         <button class=\"secondary\" data-click=\"loadCatalog\">Load catalog</button></div>\n\
+         <p class=\"muted\">Plugins listed by the catalog address in config.toml. Each one is downloaded, checksum-checked and signature-checked before you approve it.</p>\n\
+         <div id=\"catalog\"></div>\n</div>\n\
+         <script>\nconst CAP_LABELS = {labels};\n\
+         let catalogPlugins = [];\n\
+         async function loadCatalog() {{\n\
+           const box = document.getElementById('catalog');\n\
+           box.innerHTML = '<p class=\"muted\">Loading…</p>';\n\
+           try {{\n\
+             const c = await api('/api/plugins/catalog', 'GET');\n\
+             if (!c.configured) {{ box.innerHTML = '<p class=\"muted\">No catalog is set. Set catalog_url in config.toml to browse one.</p>'; return false; }}\n\
+             catalogPlugins = c.plugins;\n\
+             if (!c.plugins.length) {{ box.innerHTML = '<p class=\"muted\">The catalog lists no plugins.</p>'; return false; }}\n\
+             box.innerHTML = c.plugins.map((p) =>\n\
+               '<div class=\"card\"><strong>' + escHtml(p.name) + '</strong> <code>' + escHtml(p.id) + '</code> ' + escHtml(p.version) +\n\
+               ' <span class=\"badge\">' + escHtml(p.status) + '</span>' +\n\
+               '<p>' + escHtml(p.description) + '</p><ul>' + p.permissions_plain.map((s) => '<li>' + escHtml(s) + '</li>').join('') + '</ul>' +\n\
+               '<p class=\"muted\">' + (p.signed ? 'Signed' + (p.signed_by ? ' (key ' + escHtml(p.signed_by.slice(0, 12)) + '…)' : '') : 'Not signed') + '.</p>' +\n\
+               '<button data-click=\"installCatalog:' + escHtml(p.id) + '\">Install…</button></div>'\n\
+             ).join('');\n\
+           }} catch (e) {{ box.textContent = e.message; }}\n\
+           return false;\n\
+         }}\n\
+         async function installCatalog(id) {{\n\
+           const p = catalogPlugins.find((x) => x.id === id);\n\
+           if (!p) {{ toast('reload the catalog first', false); return; }}\n\
+           const abilities = p.permissions_plain.length ? p.permissions_plain.map((s) => '- ' + s).join('\\n') : '- Nothing';\n\
+           if (!confirm('Install ' + p.name + ' ' + p.version + '?\\n\\nIt will be allowed to:\\n' + abilities)) return;\n\
+           try {{\n\
+             await api('/api/plugins/catalog/install', 'POST', {{id: p.id, approve: p.permissions, enable: true}});\n\
+             toast('installed ' + p.id, true);\n\
+             loadCatalog();\n\
+             loadPlugins();\n\
+           }} catch (e) {{ toast(e.message, false); }}\n\
+         }}\n\
+         const escHtml = (s) => String(s).replace(/[&<>\"']/g, (c) => ({{'&':'&amp;','<':'&lt;','>':'&gt;','\"':'&quot;',\"'\":'&#39;'}})[c]);\n\
+         const asList = (v) => (typeof v === 'string' ? JSON.parse(v) : (v || []));\n\
+         async function api(url, method, body) {{\n  const r = await fetch(url, {{method, headers:{{'Content-Type':'application/json'}}, body: body ? JSON.stringify(body) : undefined}});\n  const j = await r.json().catch(() => ({{}}));\n  if (!r.ok) throw new Error(j.error || r.statusText);\n  return j;\n}}\n\
+         async function loadPlugins() {{\n\
+           const tb = document.getElementById('plugins');\n\
+           try {{\n\
+             const list = await api('/api/plugins', 'GET');\n\
+             if (!list.length) {{ tb.innerHTML = '<tr><td colspan=\"4\">No plugins installed yet.</td></tr>'; return; }}\n\
+             tb.innerHTML = list.map((p) => {{\n\
+               const id = escHtml(p.id);\n\
+               const approved = asList(p.approved_permissions);\n\
+               const requested = asList(p.permissions);\n\
+               const allowed = approved.length ? approved.map((k) => '<li>' + escHtml(CAP_LABELS[k] || k) + '</li>').join('') : '<li>Nothing</li>';\n\
+               const denied = requested.filter((k) => !approved.includes(k)).map((k) => '<li class=\"warn\">Not allowed: ' + escHtml(CAP_LABELS[k] || k) + '</li>').join('');\n\
+               const status = p.enabled ? '<span class=\"badge\">enabled</span>' : '<span class=\"badge warn\">disabled</span>';\n\
+               const toggle = p.enabled\n\
+                 ? '<button class=\"secondary\" data-click=\"togglePlugin:' + id + ':false\">Disable</button>'\n\
+                 : '<button class=\"secondary\" data-click=\"togglePlugin:' + id + ':true\">Enable</button>';\n\
+               return '<tr><td><strong>' + escHtml(p.name) + '</strong><br><code>' + id + '</code> ' + escHtml(p.version) + '</td>' +\n\
+                 '<td>' + status + '</td><td><ul>' + allowed + denied + '</ul></td>' +\n\
+                 '<td class=\"row\">' + toggle +\n\
+                 '<button class=\"secondary\" data-click=\"removePlugin:' + id + ':true\">Remove, keep data</button>' +\n\
+                 '<button class=\"danger\" data-click=\"removePlugin:' + id + ':false\">Remove and delete data</button></td></tr>';\n\
+             }}).join('');\n\
+           }} catch (e) {{ tb.innerHTML = '<tr><td colspan=\"4\">' + escHtml(e.message) + '</td></tr>'; }}\n\
+         }}\n\
+         async function installPlugin(ev) {{\n\
+           ev.preventDefault();\n\
+           const file = document.getElementById('pkg').files[0];\n\
+           if (!file) {{ toast('choose a package first', false); return false; }}\n\
+           const approved = [...document.querySelectorAll('input[name=cap]:checked')].map((c) => c.value);\n\
+           const form = new FormData();\n\
+           form.append('package', file);\n\
+           form.append('approve', approved.join(','));\n\
+           form.append('enable', document.getElementById('pen').checked ? 'true' : 'false');\n\
+           const sigFile = document.getElementById('sig').files[0];\n\
+           if (sigFile) form.append('signature', await sigFile.text());\n\
+           try {{\n\
+             const r = await fetch('/api/plugins/install', {{method: 'POST', body: form, headers: {{'X-TPT-Request': '1'}}}});\n\
+             const j = await r.json().catch(() => ({{}}));\n\
+             if (!r.ok) throw new Error(j.error || r.statusText);\n\
+             toast('installed ' + j.id, true);\n\
+             loadPlugins();\n\
+           }} catch (e) {{ toast(e.message, false); }}\n\
+           return false;\n\
+         }}\n\
+         async function togglePlugin(id, flag) {{\n\
+           try {{ await api('/api/plugins/' + encodeURIComponent(id) + (flag === 'true' ? '/enable' : '/disable'), 'POST'); loadPlugins(); }} catch (e) {{ toast(e.message, false); }}\n\
+         }}\n\
+         async function removePlugin(id, keep) {{\n\
+           const msg = keep === 'true' ? 'Remove ' + id + ' and keep its data?' : 'Remove ' + id + ' and delete all its data? This cannot be undone.';\n\
+           if (!confirm(msg)) return;\n\
+           try {{ await api('/api/plugins/' + encodeURIComponent(id) + '?keep_data=' + keep, 'DELETE'); toast('removed ' + id, true); loadPlugins(); }} catch (e) {{ toast(e.message, false); }}\n\
+         }}\n\
+         loadPlugins();\n</script>"
+    )
+}
+
+/// Admin · Remote access page: live checks of Tailscale, cloudflared and
+/// Netbird and the steps still open. The script fills it from
+/// `GET /api/admin/remote`; config changes are shown as commands to run on the
+/// server, since they ask for confirmation there.
+pub fn remote_admin_content() -> String {
+    "<div class=\"card\">\n<div class=\"row between\">\
+     <h2 class=\"m0\">Connect from anywhere</h2>\
+     <button class=\"secondary\" data-click=\"loadRemote\">Check again</button></div>\n\
+     <p class=\"muted\">These checks only look; nothing on this computer changes until you run a command below on the server.</p>\n\
+     <div id=\"remote-config\"></div>\n</div>\n\
+     <div class=\"card\"><h2 class=\"mt0\">Steps</h2><div id=\"remote-steps\">Checking…</div></div>\n\
+     <script>\n\
+     const escRemote = (s) => String(s).replace(/[&<>\"']/g, (c) => ({'&':'&amp;','<':'&lt;','>':'&gt;','\"':'&quot;',\"'\":'&#39;'})[c]);\n\
+     const STAGE_LABEL = {done: 'Done', todo: 'To do', blocked: 'Install first'};\n\
+     async function loadRemote() {\n\
+       const cfgBox = document.getElementById('remote-config');\n\
+       const stepBox = document.getElementById('remote-steps');\n\
+       try {\n\
+         const r = await fetch('/api/admin/remote');\n\
+         const j = await r.json().catch(() => ({}));\n\
+         if (!r.ok) throw new Error(j.error || r.statusText);\n\
+         const c = j.config;\n\
+         cfgBox.innerHTML = '<p>Server: <code>' + escRemote(c.host) + ':' + escRemote(c.port) + '</code>, secure cookies ' +\n\
+           (c.secure_cookies ? 'on' : 'off') + ', trust proxy ' + (c.trust_proxy ? 'on' : 'off') + '.</p>' +\n\
+           (c.exposed ? '<p class=\"badge warn\">Exposed to the network</p>' : '') +\n\
+           '<p>Tailscale: ' + escRemote(j.tailscale) + '</p>' +\n\
+           (j.probe ? '<p>' + (j.probe.reachable ? '<span class=\"badge\">Answers</span> ' : '<span class=\"badge warn\">Not answering</span> ') +\n\
+             '<code>' + escRemote(j.probe.url) + '</code>' + (j.probe.error ? ' — ' + escRemote(j.probe.error) : '') + '</p>' : '');\n\
+         stepBox.innerHTML = '<ol>' + j.steps.map((s) =>\n\
+           '<li><span class=\"badge' + (s.stage === 'done' ? '' : (s.stage === 'blocked' ? ' warn' : '')) + '\">' +\n\
+           STAGE_LABEL[s.stage] + '</span> <strong>' + escRemote(s.provider) + '</strong>: ' + escRemote(s.text) +\n\
+           (s.command ? '<br><code>' + escRemote(s.command) + '</code>' : '') + '</li>'\n\
+         ).join('') + '</ol>';\n\
+       } catch (e) {\n\
+         stepBox.textContent = e.message;\n\
+       }\n\
+       return false;\n\
+     }\n\
+     loadRemote();\n\
+     </script>"
+        .to_string()
+}
+
+/// `text` as a QR code in inline SVG, or `None` if it cannot be encoded.
+pub fn qr_svg(text: &str) -> Option<String> {
+    let code = qrcode::QrCode::new(text.as_bytes()).ok()?;
+    Some(
+        code.render::<qrcode::render::svg::Color>()
+            .min_dimensions(200, 200)
+            .quiet_zone(true)
+            .build(),
+    )
+}
+
+/// Settings card showing the server's network address for phones and tablets,
+/// with a QR code of it when one can be made.
+pub fn phone_link_card(url: &str, qr: Option<&str>) -> String {
+    let code = qr
+        .map(|svg| format!("<div class=\"qr\">{svg}</div>\n"))
+        .unwrap_or_default();
+    format!(
+        "<div class=\"card\">\n<h2 class=\"mt0\">Open on a phone or tablet</h2>\n\
+         <p>On the same Wi-Fi or network, open <a href=\"{url}\"><code>{url}</code></a>, or scan the code.</p>\n\
+         {code}<p class=\"muted\">The name works where the device can resolve <code>.local</code> names: Windows 10 or later, Apple devices and most Linux desktops. Some Android phones need the server's IP address and port instead.</p>\n</div>",
+        url = esc(url),
+    )
+}
+
+/// Settings card for a server that listens only on this computer.
+pub fn phone_link_unavailable_card() -> String {
+    "<div class=\"card\">\n<h2 class=\"mt0\">Open on a phone or tablet</h2>\n\
+     <p>This server only accepts connections from this computer. To use it from other devices, set <code>host</code> to <code>0.0.0.0</code> in <code>config.toml</code> (or <code>TPT_HOME_HOST</code>) and restart.</p>\n</div>"
+        .to_string()
 }
 
 /// Text for one JSON cell: strings as-is, null as empty, anything else as JSON.
@@ -398,9 +745,9 @@ pub fn plugin_form_page(fields: &[String], action: &str) -> String {
         .collect();
     let field_names: Vec<String> = fields.iter().map(|f| format!("'{f}'")).collect();
     format!(
-        "<div class=\"card\" style=\"max-width:480px\">\n\
-         <form onsubmit=\"return doSubmit(event)\">\n{inputs}\n\
-         <div style=\"margin-top:14px\"><button type=\"submit\">Submit</button></div>\n</form>\n\
+        "<div class=\"card w480\">\n\
+         <form data-submit=\"doSubmit\">\n{inputs}\n\
+         <div class=\"mt14\"><button type=\"submit\">Submit</button></div>\n</form>\n\
          <div id=\"pmsg\"></div>\n</div>\n\
          <script>\nasync function doSubmit(ev) {{\n  ev.preventDefault();\n  const body = {{}};\n  for (const f of [{}]) body[f] = document.getElementById('pf_' + f).value;\n  const r = await fetch('{action}', {{method:'POST', headers:{{'Content-Type':'application/json'}}, body: JSON.stringify(body)}});\n  const j = await r.json().catch(() => ({{}}));\n  const msg = document.getElementById('pmsg');\n  msg.innerHTML = r.ok ? '<div class=\"msg ok\">saved</div>' : '<div class=\"msg error\">' + (j.error || r.statusText) + '</div>';\n  return false;\n}}\n</script>",
         field_names.join(", ")
@@ -408,6 +755,49 @@ pub fn plugin_form_page(fields: &[String], action: &str) -> String {
 }
 
 /// Plugin error page fragment.
+/// A `summary` page: one card per `(label, value)`, in a responsive grid.
+/// One card on a plugin summary page.
+pub enum MetricCard {
+    /// A single value, shown large.
+    Value { label: String, value: String },
+    /// One row per group (`group`, `value`), shown as a small table.
+    Rows {
+        label: String,
+        rows: Vec<(String, String)>,
+    },
+}
+
+pub fn plugin_summary_page(metrics: &[MetricCard]) -> String {
+    let cards: String = metrics
+        .iter()
+        .map(|metric| match metric {
+            MetricCard::Value { label, value } => format!(
+                "<div class=\"card\"><div class=\"muted\">{}</div>\
+                 <div class=\"big-number\">{}</div></div>",
+                esc(label),
+                esc(value)
+            ),
+            MetricCard::Rows { label, rows } => {
+                let body: String = if rows.is_empty() {
+                    "<tr><td class=\"muted\" colspan=\"2\">Nothing yet.</td></tr>".to_string()
+                } else {
+                    rows.iter()
+                        .map(|(group, value)| {
+                            format!("<tr><td>{}</td><td>{}</td></tr>", esc(group), esc(value))
+                        })
+                        .collect()
+                };
+                format!(
+                    "<div class=\"card span-all\"><div class=\"muted\">{}</div>\
+                     <table class=\"mt8\"><tbody>{body}</tbody></table></div>",
+                    esc(label)
+                )
+            }
+        })
+        .collect();
+    format!("<div class=\"cards-grid\">{cards}</div>")
+}
+
 pub fn plugin_error_page(message: &str) -> String {
     format!("<div class=\"msg error\">{}</div>", esc(message))
 }
@@ -485,5 +875,168 @@ mod tests {
         assert!(p.contains("href=\"/notes\" class=\"active\""));
         assert!(p.contains("Admin · Users"));
         assert!(p.contains("<p>hi</p>"));
+    }
+}
+
+/// The first-run wizard at `/welcome`. `server_name` and the user list are
+/// escaped here. The body is a plain string (its braces are JavaScript), with
+/// `__NAME__` and `__USERS__` filled in.
+pub fn welcome_content(server_name: &str, users: &[UserRow], phone_html: &str) -> String {
+    let list: String = users
+        .iter()
+        .map(|u| {
+            format!(
+                "<li>{} <span class=\"muted\">({})</span></li>",
+                esc(&u.username),
+                esc(&u.role)
+            )
+        })
+        .collect();
+    WELCOME_BODY
+        .replace("__NAME__", &esc(server_name))
+        .replace("__USERS__", &list)
+        .replace("__PHONE__", phone_html)
+}
+
+const WELCOME_BODY: &str = r##"
+<p class="muted">Five minutes to set this up. Each step can be changed later from the Admin pages.</p>
+<div class="card">
+  <h2 class="mt0">1. Name this server</h2>
+  <form>
+    <div class="spread">
+      <input id="sn" value="__NAME__" maxlength="64" required aria-label="Server name">
+      <button type="submit">Save name</button>
+    </div>
+  </form>
+  <div id="sn-msg"></div>
+</div>
+<div class="card">
+  <h2 class="mt0">2. Family accounts</h2>
+  <p class="muted">Each person gets their own account and signs in with it.</p>
+  <ul id="users">__USERS__</ul>
+  <form>
+    <div class="spread">
+      <input id="nu" placeholder="username" required aria-label="Username">
+      <input id="np" type="password" placeholder="password (8+ characters)" minlength="8" required aria-label="Password">
+      <select id="nr" aria-label="Role"><option value="user">user</option><option value="admin">admin</option></select>
+      <button type="submit">Add account</button>
+    </div>
+  </form>
+  <div id="u-msg"></div>
+  __PHONE__
+</div>
+<div class="card">
+  <h2 class="mt0">3. Connect from anywhere (optional)</h2>
+  <p class="muted"><a href="/admin/remote">Remote access</a> checks Tailscale, Cloudflare and Netbird on this computer and lists the steps still to do. Changing the settings is done with <code>tpt-home remote setup</code> on the server, which asks before it changes anything.</p>
+</div>
+<div class="card">
+  <h2 class="mt0">4. Apps</h2>
+  <p class="muted">If the server has a catalog address set (<code>catalog_url</code> in config.toml), <a href="/admin/plugins">Admin · Plugins</a> lists the apps it offers, and you approve each one before it is installed. The apps on the Dashboard are the ones this server has now.</p>
+  <div id="starter"><button type="button" class="secondary" data-click="loadStarter">Show starter apps</button></div>
+  <button type="button" data-click="finish">Finish setup</button>
+  <div id="f-msg"></div>
+</div>
+<script>
+async function call(url, method, body) {
+  const r = await fetch(url, {method, headers:{'Content-Type':'application/json'}, body: body ? JSON.stringify(body) : undefined});
+  const j = await r.json().catch(() => ({}));
+  if (!r.ok) throw new Error(j.error || r.statusText);
+  return j;
+}
+function note(id, text, ok) {
+  document.getElementById(id).innerHTML = '<div class="msg ' + (ok ? 'ok' : 'error') + '"></div>';
+  document.querySelector('#' + id + ' .msg').textContent = text;
+}
+let starterPlugins = [];
+const escW = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'})[c]);
+async function loadStarter() {
+  const box = document.getElementById('starter');
+  try {
+    const c = await call('/api/plugins/catalog', 'GET');
+    if (!c.configured) { box.innerHTML = '<p class="muted">No app catalog is set on this server (catalog_url in config.toml).</p>'; return false; }
+    starterPlugins = c.plugins.filter((p) => p.status === 'not installed');
+    if (!starterPlugins.length) { box.innerHTML = '<p class="muted">Every app in the catalog is already installed.</p>'; return false; }
+    box.innerHTML = starterPlugins.map((p, i) =>
+      '<label class="label-block"><input type="checkbox" id="st-' + i + '"> <strong>' + escW(p.name) + '</strong> ' + escW(p.description) +
+      '<br><span class="muted">Allowed to: ' + escW(p.permissions_plain.join('; ') || 'nothing') + '</span></label>'
+    ).join('') + '<button type="button" data-click="installStarter">Install selected</button><div id="st-msg"></div>';
+  } catch (e) { box.textContent = e.message; }
+  return false;
+}
+async function installStarter() {
+  const picked = starterPlugins.filter((p, i) => document.getElementById('st-' + i)?.checked);
+  if (!picked.length) { note('st-msg', 'Choose at least one app.', false); return false; }
+  let done = 0;
+  for (const p of picked) {
+    try {
+      await call('/api/plugins/catalog/install', 'POST', {id: p.id, approve: p.permissions, enable: true});
+      done++;
+    } catch (e) { note('st-msg', p.name + ': ' + e.message, false); }
+  }
+  note('st-msg', 'Installed ' + done + ' of ' + picked.length + '.', done === picked.length);
+  return false;
+}
+async function saveName(ev) {
+  ev.preventDefault();
+  try {
+    const s = await call('/api/admin/server', 'PUT', {name: document.getElementById('sn').value});
+    note('sn-msg', 'Saved. This server is now called "' + s.name + '".', true);
+  } catch (e) { note('sn-msg', e.message, false); }
+  return false;
+}
+async function addUser(ev) {
+  ev.preventDefault();
+  try {
+    const u = await call('/api/admin/users', 'POST', {
+      username: document.getElementById('nu').value,
+      password: document.getElementById('np').value,
+      role: document.getElementById('nr').value
+    });
+    const li = document.createElement('li');
+    li.textContent = u.username + ' (' + u.role + ')';
+    document.getElementById('users').appendChild(li);
+    document.getElementById('nu').value = '';
+    document.getElementById('np').value = '';
+    note('u-msg', 'Account added.', true);
+  } catch (e) { note('u-msg', e.message, false); }
+  return false;
+}
+async function finish() {
+  try {
+    await call('/api/admin/server', 'PUT', {wizard_done: true});
+    location.href = '/dashboard';
+  } catch (e) { note('f-msg', e.message, false); }
+}
+// Inline onsubmit attributes are blocked by the page's CSP, so forms are wired here.
+document.getElementById('sn').form.addEventListener('submit', saveName);
+document.getElementById('nu').form.addEventListener('submit', addUser);
+</script>"##;
+
+#[cfg(test)]
+mod capability_label_tests {
+    use super::*;
+
+    #[test]
+    fn every_capability_has_a_distinct_plain_label() {
+        let labels: Vec<&str> = CAPABILITY_KEYS
+            .iter()
+            .map(|k| capability_label(k))
+            .collect();
+        for (i, label) in labels.iter().enumerate() {
+            assert!(
+                !label.starts_with("Use an unknown"),
+                "{}",
+                CAPABILITY_KEYS[i]
+            );
+            assert!(!label.contains('_'), "no raw permission names: {label}");
+            for other in &labels[i + 1..] {
+                assert_ne!(label, other);
+            }
+        }
+    }
+
+    #[test]
+    fn unknown_capability_gets_a_generic_label() {
+        assert_eq!(capability_label("teleport"), "Use an unknown capability");
     }
 }

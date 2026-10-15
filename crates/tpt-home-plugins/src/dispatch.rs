@@ -19,7 +19,7 @@ use tpt_home_ui as ui;
 use crate::lifecycle;
 use crate::manifest::Permissions;
 use crate::registry::Backend;
-use crate::runtime::{self, PluginRequest};
+use crate::runtime::{self, PluginRequest, PluginUser};
 
 pub(crate) fn db_path() -> std::path::PathBuf {
     tpt_home_core::config::global().db_path()
@@ -38,6 +38,7 @@ pub(crate) fn storage_dir(id: &str) -> std::path::PathBuf {
 /// parameter, so this only sees plugin traffic.
 pub async fn api_invoke(
     State(_db): State<DbPool>,
+    Extension(user): Extension<AuthUser>,
     Path((plugin_id, rest)): Path<(String, String)>,
     method: axum::http::Method,
     Query(query): Query<std::collections::HashMap<String, String>>,
@@ -49,13 +50,22 @@ pub async fn api_invoke(
         .collect::<Vec<_>>()
         .join("&");
     let body = (!body.is_empty()).then(|| String::from_utf8_lossy(&body).into_owned());
-    invoke_plugin(&plugin_id, method.as_str(), &rest, &query_string, body).await
+    invoke_plugin(
+        Some(&user),
+        &plugin_id,
+        method.as_str(),
+        &rest,
+        &query_string,
+        body,
+    )
+    .await
 }
 
 /// Run one call against an enabled plugin, whatever its runtime. `rest` is the
 /// path below `/api/<plugin_id>` without its leading slash. Shared by the HTTP
 /// route and the MCP tools, so both get the same runtime and permission rules.
 pub async fn invoke_plugin(
+    user: Option<&AuthUser>,
     plugin_id: &str,
     method: &str,
     rest: &str,
@@ -85,6 +95,7 @@ pub async fn invoke_plugin(
         path: format!("/{rest}"),
         query: query.to_string(),
         body,
+        user: user.map(PluginUser::from),
     };
 
     let granted = plugin.effective_permissions();
@@ -175,6 +186,23 @@ pub async fn page(
             let columns = page_columns(&page_def.columns, rows.first());
             ui::plugin_detail_page(&columns, rows.first())
         }
+        "summary" => {
+            let mut cards = Vec::with_capacity(page_def.metrics.len());
+            for metric in &page_def.metrics {
+                cards.push(if metric.grouped {
+                    ui::MetricCard::Rows {
+                        label: metric.label.clone(),
+                        rows: grouped_rows(&db, &metric.sql).await?,
+                    }
+                } else {
+                    ui::MetricCard::Value {
+                        label: metric.label.clone(),
+                        value: scalar(&db, &metric.sql).await?,
+                    }
+                });
+            }
+            ui::plugin_summary_page(&cards)
+        }
         "form" => ui::plugin_form_page(
             &page_def.fields,
             &format!("{api_base}{}", page_def.action.as_deref().unwrap_or("/")),
@@ -206,6 +234,43 @@ fn page_columns(declared: &[String], first: Option<&serde_json::Value>) -> Vec<S
         .and_then(serde_json::Value::as_object)
         .map(|o| o.keys().cloned().collect())
         .unwrap_or_default()
+}
+
+/// The first column of the first row of a metric query, as display text.
+/// No row shows as an em dash.
+async fn scalar(db: &DbPool, sql: &str) -> Result<String, ApiError> {
+    let Some(row) = sqlx::query(sql).fetch_optional(db).await? else {
+        return Ok(EMPTY_CELL.to_string());
+    };
+    Ok(cell_text(&row, 0))
+}
+
+/// Rows of a grouped metric as (group, value) text, capped at
+/// `MAX_GROUP_ROWS`. A row with no second column shows a dash as its value.
+async fn grouped_rows(db: &DbPool, sql: &str) -> Result<Vec<(String, String)>, ApiError> {
+    let rows = sqlx::query(sql).fetch_all(db).await?;
+    Ok(rows
+        .iter()
+        .take(crate::manifest::MAX_GROUP_ROWS)
+        .map(|row| (cell_text(row, 0), cell_text(row, 1)))
+        .collect())
+}
+
+const EMPTY_CELL: &str = "\u{2014}";
+
+/// One SQLite cell as display text: integer, then real (two decimals), then
+/// text. NULL, or a column that is missing, shows an em dash.
+fn cell_text(row: &sqlx::sqlite::SqliteRow, index: usize) -> String {
+    if let Ok(v) = row.try_get::<Option<i64>, _>(index) {
+        return v.map_or(EMPTY_CELL.to_string(), |v| v.to_string());
+    }
+    if let Ok(v) = row.try_get::<Option<f64>, _>(index) {
+        return v.map_or(EMPTY_CELL.to_string(), |v| format!("{v:.2}"));
+    }
+    if let Ok(v) = row.try_get::<Option<String>, _>(index) {
+        return v.unwrap_or_else(|| EMPTY_CELL.to_string());
+    }
+    EMPTY_CELL.to_string()
 }
 
 /// Read rows from a plugin's scoped table as JSON objects. `Some(id)` selects a
@@ -290,6 +355,7 @@ pub async fn install_plugin(
     let mut package: Option<Vec<u8>> = None;
     let mut enable: Option<bool> = None;
     let mut granted = Permissions::default();
+    let mut signature: Option<String> = None;
     while let Some(mut field) = multipart
         .next_field()
         .await
@@ -316,6 +382,9 @@ pub async fn install_plugin(
                     "true" | "1" | "on"
                 ));
             }
+            Some("signature") => {
+                signature = Some(field.text().await.unwrap_or_default());
+            }
             Some("approve") => {
                 let list = field.text().await.unwrap_or_default();
                 granted = Permissions::parse_list(&list).map_err(ApiError::bad_request)?;
@@ -327,31 +396,52 @@ pub async fn install_plugin(
     }
     let archive =
         package.ok_or_else(|| ApiError::bad_request("multipart field \"package\" is required"))?;
+    let (status, body) =
+        install_archive(&db, &archive, signature.as_deref(), &granted, enable).await?;
+    Ok((status, Json(body)))
+}
 
-    let (staged, manifest) = lifecycle::stage_package(&archive)
+/// Verify, stage and install one package with the admin's approvals. Shared by
+/// the upload route and the catalog install. `enable` of `None` keeps the
+/// plugin's current state, so an upgrade does not take a running plugin offline.
+pub async fn install_archive(
+    db: &DbPool,
+    archive: &[u8],
+    signature: Option<&str>,
+    granted: &Permissions,
+    enable: Option<bool>,
+) -> Result<(StatusCode, serde_json::Value), ApiError> {
+    let cfg = tpt_home_core::config::try_global()
+        .cloned()
+        .unwrap_or_default();
+    let signed_by = crate::signing::check_install(archive, signature, &cfg)
+        .map_err(|e| ApiError::bad_request(e.to_string()))?;
+
+    let (staged, manifest) = lifecycle::stage_package(archive)
         .map_err(|e| ApiError::bad_request(format!("invalid package: {e}")))?;
-    // Without an explicit `enable`, an upgrade keeps the plugin's current state
-    // rather than taking a running plugin offline.
     let enable = match enable {
         Some(enable) => enable,
-        None => lifecycle::is_enabled(&db, &manifest.plugin.id)
+        None => lifecycle::is_enabled(db, &manifest.plugin.id)
             .await
             .map_err(|e| ApiError::internal(e.to_string()))?,
     };
-    let installed = lifecycle::install_from_dir(&db, &staged, enable, &granted)
+    let installed = lifecycle::install_from_dir(db, &staged, enable, granted)
         .await
-        .map_err(|e| ApiError::internal(format!("install failed: {e}")))?;
+        // Almost every failure here is the package or manifest being refused,
+        // and the admin needs to read why, so it is a client error.
+        .map_err(|e| ApiError::bad_request(format!("install failed: {e}")))?;
     let effective = granted.intersect(&installed.permissions);
 
     Ok((
         StatusCode::CREATED,
-        Json(json!({
+        json!({
             "ok": true,
             "id": installed.plugin.id,
             "version": installed.plugin.version,
             "requested_permissions": installed.permissions.to_json(),
             "approved_permissions": effective.to_json(),
-        })),
+            "signed_by": signed_by,
+        }),
     ))
 }
 

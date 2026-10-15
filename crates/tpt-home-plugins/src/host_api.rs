@@ -30,6 +30,8 @@ use serde::Deserialize;
 use serde::de::DeserializeOwned;
 use serde_json::{Value, json};
 
+use tpt_home_core::auth::api_token::TokenScopes;
+
 use crate::dispatch::{db_path, storage_dir};
 use crate::host::{HostError, HostResult, HostServices};
 use crate::registry::{self, Backend};
@@ -66,8 +68,21 @@ type CallError = (StatusCode, String);
 /// `POST /api/plugin-host/<plugin_id>/<rest>`.
 pub async fn plugin_host(
     Path((plugin_id, rest)): Path<(String, String)>,
+    scopes: Option<axum::Extension<TokenScopes>>,
     body: axum::body::Bytes,
 ) -> Response {
+    // Only a token scoped to this plugin may use its host services. A browser
+    // session, or a token with the general `api` scope, is refused: the plugin's
+    // own routes are the place for users, and this route bypasses them.
+    let scoped = scopes
+        .map(|axum::Extension(s)| s.0.iter().any(|x| *x == format!("plugin:{plugin_id}")))
+        .unwrap_or(false);
+    if !scoped {
+        return envelope(Err((
+            StatusCode::FORBIDDEN,
+            format!("host services need a token scoped to plugin:{plugin_id}"),
+        )));
+    }
     let Some(plugin) = registry::get_enabled(&plugin_id) else {
         return envelope(Err((
             StatusCode::NOT_FOUND,

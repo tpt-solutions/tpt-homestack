@@ -13,6 +13,7 @@ use serde_json::json;
 
 use tpt_home_core::auth::user::{self, AuthUser, Role};
 use tpt_home_core::prelude::*;
+use tpt_home_core::settings;
 
 #[derive(serde::Serialize)]
 pub struct UserView {
@@ -54,6 +55,8 @@ pub async fn create(
     let role = Role::parse(&body.role)
         .ok_or_else(|| ApiError::bad_request("role must be 'admin' or 'user'"))?;
     let created = user::create_user(&db, &body.username, &body.password, role).await?;
+    // The admin chose this password, so the new user picks their own at sign-in.
+    settings::set_must_change_password(&db, created.id, true).await?;
     Ok((axum::http::StatusCode::CREATED, Json(view(&created))))
 }
 
@@ -106,6 +109,9 @@ pub async fn update(
 
     if let Some(pw) = &body.password {
         user::set_password(&db, id, pw).await?;
+        // An admin reset: the user must replace it. Resetting your own password
+        // through this route is a choice, so no mark.
+        settings::set_must_change_password(&db, id, id != caller.id).await?;
     }
 
     let updated = user::get_user_by_id(&db, id).await?;
@@ -129,4 +135,74 @@ pub async fn delete(
     }
     user::delete_user(&db, id).await?;
     Ok(Json(json!({ "ok": true })))
+}
+
+/// GET /api/admin/jobs: each scheduled job's last run, outcome and next run.
+pub async fn jobs() -> Json<Vec<registry::JobStatus>> {
+    Json(registry::job_statuses())
+}
+
+/// When this process started, for the uptime figure in `/api/admin/health`.
+pub fn started_at() -> i64 {
+    static STARTED: std::sync::OnceLock<i64> = std::sync::OnceLock::new();
+    *STARTED.get_or_init(|| {
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_secs() as i64)
+            .unwrap_or(0)
+    })
+}
+
+#[derive(serde::Serialize)]
+pub struct Health {
+    pub version: &'static str,
+    pub started_at: i64,
+    pub uptime_secs: i64,
+    pub blueprints: usize,
+    pub db_bytes: u64,
+    pub backups: usize,
+    pub last_backup_at: Option<i64>,
+    pub backup_every_hours: u64,
+    pub backup_keep: usize,
+    pub jobs: usize,
+    /// Jobs whose last run did not end `ok`.
+    pub failing_jobs: usize,
+    /// Bytes the server can use on the disk holding the data directory (free
+    /// space for non-privileged processes); `None` when the platform cannot say.
+    pub disk_free_bytes: Option<u64>,
+    /// Total bytes on that disk; `None` when the platform cannot say.
+    pub disk_total_bytes: Option<u64>,
+}
+
+/// GET /api/admin/health: version, uptime, database and backup status, and
+/// how many scheduled jobs are failing.
+pub async fn health(Extension(cfg): Extension<std::sync::Arc<Config>>) -> Json<Health> {
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs() as i64)
+        .unwrap_or(0);
+    let started = started_at();
+    let backups = crate::backup::list(&crate::backup::default_dir(&cfg));
+    let jobs = registry::job_statuses();
+    let failing = jobs
+        .iter()
+        .filter(|j| j.last_outcome.as_deref().is_some_and(|o| o != "ok"))
+        .count();
+    Json(Health {
+        version: tpt_home_core::VERSION,
+        started_at: started,
+        uptime_secs: now - started,
+        blueprints: registry::blueprints().count(),
+        db_bytes: std::fs::metadata(cfg.db_path())
+            .map(|m| m.len())
+            .unwrap_or(0),
+        backups: backups.len(),
+        last_backup_at: backups.first().map(|b| b.created_at),
+        backup_every_hours: cfg.backup_every_hours,
+        backup_keep: cfg.backup_keep,
+        jobs: jobs.len(),
+        failing_jobs: failing,
+        disk_free_bytes: fs4::available_space(&cfg.data_dir).ok(),
+        disk_total_bytes: fs4::total_space(&cfg.data_dir).ok(),
+    })
 }

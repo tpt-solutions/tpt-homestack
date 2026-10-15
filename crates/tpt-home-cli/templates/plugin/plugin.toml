@@ -1,0 +1,36 @@
+# <TITLE> plugin. Build and pack it with the steps printed by
+# `tpt-home new --plugin <NAME>`. The entry is the wasm file next to this manifest.
+
+[plugin]
+id = "<NAME>"
+name = "<TITLE>"
+version = "0.1.0"
+entry = "plugin.wasm"
+
+[permissions]
+db = true
+
+[limits]
+max_fuel = 50000000
+max_memory_mb = 16
+
+# Tables are prefixed with the plugin id, so this is `<NAME>_items` in SQL.
+[[tables]]
+name = "items"
+columns = [
+    { name = "title", kind = "text" },
+]
+
+[[pages]]
+path = "/items"
+title = "<TITLE>"
+kind = "table"
+table = "items"
+columns = ["id", "title"]
+
+[[pages]]
+path = "/new"
+title = "Add item"
+kind = "form"
+fields = ["title"]
+action = "/items"

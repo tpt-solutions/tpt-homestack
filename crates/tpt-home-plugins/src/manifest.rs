@@ -7,7 +7,7 @@
 //! entry binary, declared capabilities (granted by the admin at install
 //! time), resource limits, host-created tables and declarative pages.
 
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use std::path::Path;
 
 /// Current plugin ABI version understood by this host.
@@ -52,7 +52,7 @@ pub enum Runtime {
 
 /// `[permissions]` section. Everything defaults to *denied*; the admin sees
 /// these at install time and the runtime enforces the approved set.
-#[derive(Debug, Clone, Default, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(default)]
 pub struct Permissions {
     /// SQL access, scoped to `<id>_*` tables only.
@@ -61,6 +61,20 @@ pub struct Permissions {
     pub kv: bool,
     /// File storage scoped to the plugin's data directory.
     pub storage: bool,
+    /// Outbound plain-HTTP requests, only to `http_hosts`. Approved by the
+    /// admin as `http`.
+    pub http: bool,
+    /// Declared `host` or `host:port` targets (port 80 when omitted). Requested
+    /// in the manifest; in effect only when `http` is approved.
+    #[serde(default)]
+    pub http_hosts: Vec<String>,
+    /// Send to admin-configured notification channels with `tpt.notify`.
+    /// Approved by the admin as `notify`.
+    pub notify: bool,
+    /// Channel names the plugin may send to. Requested in the manifest; in
+    /// effect only when `notify` is approved.
+    #[serde(default)]
+    pub notify_channels: Vec<String>,
 }
 
 impl Permissions {
@@ -73,6 +87,8 @@ impl Permissions {
                 "db" => granted.db = true,
                 "kv" => granted.kv = true,
                 "storage" => granted.storage = true,
+                "http" => granted.http = true,
+                "notify" => granted.notify = true,
                 other => return Err(format!("unknown permission '{other}'")),
             }
         }
@@ -92,6 +108,12 @@ impl Permissions {
         if self.storage {
             granted.push("storage");
         }
+        if self.http {
+            granted.push("http");
+        }
+        if self.notify {
+            granted.push("notify");
+        }
         serde_json::to_string(&granted).expect("permission list serialization")
     }
 
@@ -104,22 +126,41 @@ impl Permissions {
             db: has("db"),
             kv: has("kv"),
             storage: has("storage"),
+            http: has("http"),
+            http_hosts: Vec::new(),
+            notify: has("notify"),
+            notify_channels: Vec::new(),
         }
     }
 
     /// Capabilities that are both requested by the manifest and approved by
     /// the admin. The runtime uses this, never the manifest alone.
     pub fn intersect(&self, approved: &Self) -> Self {
+        let http = self.http && approved.http;
+        let notify = self.notify && approved.notify;
         Self {
             db: self.db && approved.db,
             kv: self.kv && approved.kv,
             storage: self.storage && approved.storage,
+            http,
+            // The approval names the capability; the hosts come from the manifest.
+            http_hosts: if http {
+                self.http_hosts.clone()
+            } else {
+                Vec::new()
+            },
+            notify,
+            notify_channels: if notify {
+                self.notify_channels.clone()
+            } else {
+                Vec::new()
+            },
         }
     }
 }
 
 /// `[limits]` section. Defaults are deliberately modest.
-#[derive(Debug, Clone, Deserialize, PartialEq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(default)]
 pub struct Limits {
     /// Wasm fuel per invocation (roughly instructions/10k).
@@ -183,7 +224,27 @@ pub struct PageDef {
     /// `table` pages: a `detail` page path. Rows link to it as `?id=<row>`.
     #[serde(default)]
     pub link: Option<String>,
+    /// `summary` pages: one card per metric.
+    #[serde(default)]
+    pub metrics: Vec<MetricDef>,
 }
+
+/// One card on a `summary` page (`metrics = [{ label, sql }]`). The SQL is a
+/// single scoped SELECT. Without `grouped`, the first column of the first row
+/// is shown. With `grouped = true`, each row is one line of a small table: the
+/// first column is the group, the second the value.
+#[derive(Debug, Clone, Deserialize, PartialEq)]
+pub struct MetricDef {
+    pub label: String,
+    pub sql: String,
+    #[serde(default)]
+    pub grouped: bool,
+}
+
+/// Most cards one summary page may show.
+pub const MAX_METRICS: usize = 12;
+/// Most rows a grouped card shows; extra rows are dropped.
+pub const MAX_GROUP_ROWS: usize = 50;
 
 /// A forward-only schema migration (`[[migrations]]`). Applied once per
 /// plugin, in version order, inside the install transaction.
@@ -209,6 +270,68 @@ pub struct PluginManifest {
     pub pages: Vec<PageDef>,
     #[serde(default)]
     pub migrations: Vec<MigrationDef>,
+    #[serde(default)]
+    pub jobs: Vec<JobDef>,
+    #[serde(default)]
+    pub hooks: Vec<HookDef>,
+}
+
+/// A signed inbound endpoint (`[[hooks]]`). Senders post to
+/// `/api/plugin-hooks/<id>/<name>`; the host verifies the HMAC and calls the
+/// plugin at `/hooks/<name>` with the body. See [`crate::hooks`].
+#[derive(Debug, Clone, Deserialize, PartialEq)]
+pub struct HookDef {
+    /// Endpoint name, unique within the plugin. Part of the URL.
+    pub name: String,
+}
+
+/// Most signed endpoints one plugin may declare.
+pub const MAX_HOOKS: usize = 10;
+
+/// A scheduled job (`[[jobs]]`). The host calls `path` below `/api/<id>` with
+/// `POST` and no caller, once every `every`. See [`crate::jobs`].
+#[derive(Debug, Clone, Deserialize, PartialEq)]
+pub struct JobDef {
+    /// Job name for logs and status, unique within the plugin.
+    pub name: String,
+    /// A count and a unit: `s`, `m`, `h` or `d`, e.g. `"5m"`. Minimum `10s`.
+    pub every: String,
+    /// Handler path below `/api/<id>`, e.g. `/sweep`.
+    pub path: String,
+}
+
+/// Most jobs one plugin may declare.
+pub const MAX_JOBS: usize = 10;
+
+/// Parse a job interval such as `"30s"`, `"5m"`, `"1h"` or `"2d"` into seconds.
+/// The same rules as `#[bp_job(every = ...)]`: a count and a unit, at least 10s.
+pub fn job_interval_secs(text: &str) -> Result<u64, String> {
+    let text = text.trim();
+    let Some(unit) = text.chars().last() else {
+        return Err("interval is empty".into());
+    };
+    let digits = &text[..text.len() - unit.len_utf8()];
+    let multiplier = match unit {
+        's' => 1,
+        'm' => 60,
+        'h' => 3_600,
+        'd' => 86_400,
+        _ => {
+            return Err(format!(
+                "invalid interval '{text}': unit must be s, m, h or d"
+            ));
+        }
+    };
+    let count: u64 = digits
+        .parse()
+        .map_err(|_| format!("invalid interval '{text}': expected a number before the unit"))?;
+    let secs = count
+        .checked_mul(multiplier)
+        .ok_or_else(|| format!("interval '{text}' is too large"))?;
+    if secs < 10 {
+        return Err(format!("interval '{text}' is too short: minimum is 10s"));
+    }
+    Ok(secs)
 }
 
 /// Parse and validate a manifest from TOML text.
@@ -320,8 +443,28 @@ fn validate(m: &PluginManifest) -> Result<(), anyhow::Error> {
                     anyhow::bail!("form action '{action}' must be a plain path");
                 }
             }
+            "summary" => {
+                if page.metrics.is_empty() || page.metrics.len() > MAX_METRICS {
+                    anyhow::bail!("summary page '{}' needs 1-{MAX_METRICS} metrics", page.path);
+                }
+                for metric in &page.metrics {
+                    if metric.label.trim().is_empty() || metric.label.chars().count() > 60 {
+                        anyhow::bail!("metric label must be 1-60 characters");
+                    }
+                    if !metric
+                        .sql
+                        .trim_start()
+                        .to_ascii_uppercase()
+                        .starts_with("SELECT")
+                    {
+                        anyhow::bail!("metric '{}' must be a SELECT", metric.label);
+                    }
+                    crate::scope::validate_scoped_sql(&m.plugin.id, &metric.sql)
+                        .map_err(|e| anyhow::anyhow!("metric '{}': {e}", metric.label))?;
+                }
+            }
             other => anyhow::bail!(
-                "page '{}' kind '{other}' must be table|form|list|detail",
+                "page '{}' kind '{other}' must be table|form|list|detail|summary",
                 page.path
             ),
         }
@@ -339,11 +482,122 @@ fn validate(m: &PluginManifest) -> Result<(), anyhow::Error> {
         anyhow::bail!("limits.max_memory_mb must be 1-256");
     }
     validate_migrations(m)?;
+    validate_jobs(m)?;
+    validate_hooks(m)?;
+    validate_http(m)?;
+    validate_notify(m)?;
     if m.limits.max_fuel < 1000 {
         anyhow::bail!("limits.max_fuel must be at least 1000");
     }
     if !(1..=60_000).contains(&m.limits.max_millis) {
         anyhow::bail!("limits.max_millis must be 1-60000");
+    }
+    Ok(())
+}
+
+/// Jobs: a bounded count, unique plain names, a valid interval and a plain
+/// handler path.
+fn validate_jobs(m: &PluginManifest) -> Result<(), anyhow::Error> {
+    if m.jobs.len() > MAX_JOBS {
+        anyhow::bail!("at most {MAX_JOBS} jobs per plugin");
+    }
+    let mut names = std::collections::HashSet::new();
+    for job in &m.jobs {
+        valid_component(&job.name, "job name")?;
+        if !names.insert(job.name.as_str()) {
+            anyhow::bail!("job '{}' is declared twice", job.name);
+        }
+        job_interval_secs(&job.every).map_err(|e| anyhow::anyhow!("job '{}': {e}", job.name))?;
+        let plain = job.path.starts_with('/')
+            && job.path.len() > 1
+            && job
+                .path
+                .chars()
+                .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '_' || c == '/')
+            && !job.path.contains("//");
+        if !plain {
+            anyhow::bail!(
+                "job '{}' path '{}' must be a plain path such as /sweep",
+                job.name,
+                job.path
+            );
+        }
+    }
+    Ok(())
+}
+
+/// Signed endpoints: a bounded count and unique plain names.
+fn validate_hooks(m: &PluginManifest) -> Result<(), anyhow::Error> {
+    if m.hooks.len() > MAX_HOOKS {
+        anyhow::bail!("at most {MAX_HOOKS} hooks per plugin");
+    }
+    let mut names = std::collections::HashSet::new();
+    for hook in &m.hooks {
+        valid_component(&hook.name, "hook name")?;
+        if !names.insert(hook.name.as_str()) {
+            anyhow::bail!("hook '{}' is declared twice", hook.name);
+        }
+    }
+    Ok(())
+}
+
+/// Most hosts one plugin may declare.
+pub const MAX_HTTP_HOSTS: usize = 20;
+
+/// Parse a declared target: `host` or `host:port`. The host is lowercase
+/// letters, digits, `.` and `-`, so it is safe in a request line or a `Host`
+/// header. `None` when the text is not a valid target.
+pub fn parse_target(text: &str) -> Option<(String, Option<u16>)> {
+    let text = text.trim().to_ascii_lowercase();
+    let (host, port) = match text.rsplit_once(':') {
+        Some((host, port)) => (host, Some(port.parse::<u16>().ok().filter(|p| *p != 0)?)),
+        None => (text.as_str(), None),
+    };
+    let ok = !host.is_empty()
+        && host.len() <= 253
+        && !host.starts_with(['.', '-'])
+        && !host.ends_with(['.', '-'])
+        && host
+            .chars()
+            .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '.' || c == '-');
+    ok.then(|| (host.to_string(), port))
+}
+
+/// Outbound HTTP: hosts only make sense with the capability requested, and
+/// every declared target must normalize.
+fn validate_http(m: &PluginManifest) -> Result<(), anyhow::Error> {
+    let hosts = &m.permissions.http_hosts;
+    if hosts.is_empty() {
+        return Ok(());
+    }
+    if !m.permissions.http {
+        anyhow::bail!("http_hosts needs `http = true` in [permissions]");
+    }
+    if hosts.len() > MAX_HTTP_HOSTS {
+        anyhow::bail!("at most {MAX_HTTP_HOSTS} http_hosts per plugin");
+    }
+    for host in hosts {
+        if parse_target(host).is_none() {
+            anyhow::bail!("http host '{host}' must be host or host:port");
+        }
+    }
+    Ok(())
+}
+
+/// Notification channels: they need the capability, and names are plain.
+fn validate_notify(m: &PluginManifest) -> Result<(), anyhow::Error> {
+    let channels = &m.permissions.notify_channels;
+    if channels.is_empty() {
+        return Ok(());
+    }
+    if !m.permissions.notify {
+        anyhow::bail!("notify_channels needs `notify = true` in [permissions]");
+    }
+    if channels.len() > 10 {
+        anyhow::bail!("at most 10 notify_channels per plugin");
+    }
+    for channel in channels {
+        valid_component(channel, "notification channel")?;
     }
     Ok(())
 }
@@ -499,7 +753,8 @@ statements = []
             Permissions {
                 db: true,
                 kv: true,
-                storage: false
+                storage: false,
+                ..Default::default()
             }
         );
         assert!(
@@ -514,6 +769,7 @@ statements = []
             db: true,
             kv: true,
             storage: true,
+            ..Default::default()
         };
         assert_eq!(Permissions::from_json(&all.to_json()), all);
         assert_eq!(Permissions::from_json("not json"), Permissions::default());
@@ -529,11 +785,13 @@ statements = []
             db: true,
             kv: true,
             storage: false,
+            ..Default::default()
         };
         let approved = Permissions {
             db: true,
             kv: false,
             storage: true,
+            ..Default::default()
         };
         // db is requested and approved; kv is requested but not approved;
         // storage is approved but never requested.
@@ -543,7 +801,8 @@ statements = []
             Permissions {
                 db: true,
                 kv: false,
-                storage: false
+                storage: false,
+                ..Default::default()
             }
         );
     }

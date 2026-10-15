@@ -27,14 +27,14 @@ pub fn track_page(user: &AuthUser) -> Html<String> {
 fn content_fragment() -> String {
     format!(
         "<div class=\"card\">\n\
-         <div class=\"spread\">\n<h2 style=\"margin:0\">Tables</h2>\n\
-         <button onclick=\"showNewTable()\">New table</button>\n</div>\n\
-         <div id=\"newtable\" style=\"display:none\">\n\
-         <label for=\"tname\">Table name</label><input id=\"tname\" style=\"max-width:280px\">\n\
+         <div class=\"spread\">\n<h2 class=\"m0\">Tables</h2>\n\
+         <button data-click=\"showNewTable\">New table</button>\n</div>\n\
+         <div id=\"newtable\" class=\"s-display-none\">\n\
+         <label for=\"tname\">Table name</label><input id=\"tname\" class=\"s-max-width-280px\">\n\
          <div id=\"fields\"></div>\n\
-         <div class=\"row\" style=\"margin-top:8px\">\n\
-         <button class=\"secondary\" onclick=\"addFieldRow()\">+ field</button>\n\
-         <button onclick=\"createTable()\">Create</button>\n</div>\n</div>\n\
+         <div class=\"row mt8\">\n\
+         <button class=\"secondary\" data-click=\"addFieldRow\">+ field</button>\n\
+         <button data-click=\"createTable\">Create</button>\n</div>\n</div>\n\
          <div id=\"msg\"></div>\n</div>\n\
          <div id=\"tables\"></div>\n\
          <div id=\"rowsview\"></div>\n\
@@ -51,14 +51,15 @@ let TABLES = [];
 let fieldRowCount = 0;
 function showNewTable() {
   const el = document.getElementById('newtable');
-  el.style.display = el.style.display === 'none' ? 'block' : 'none';
-  if (el.style.display === 'block' && fieldRowCount === 0) { addFieldRow(); addFieldRow(); }
+  // Computed style: the panel starts hidden by a class, which inline style does not show.
+  el.style.display = getComputedStyle(el).display === 'none' ? 'block' : 'none';
+  if (getComputedStyle(el).display === 'block' && fieldRowCount === 0) { addFieldRow(); addFieldRow(); }
 }
 function addFieldRow() {
   const div = document.createElement('div');
   div.className = 'row'; div.style.marginTop = '6px';
-  div.innerHTML = '<input class="fname" placeholder="field name" style="max-width:200px">' +
-    '<select class="fkind" style="max-width:140px">' +
+  div.innerHTML = '<input class="fname w200" placeholder="field name">' +
+    '<select class="fkind s-max-width-140px">' +
     '<option>text</option><option>integer</option><option>real</option><option>bool</option></select>';
   document.getElementById('fields').appendChild(div);
   fieldRowCount++;
@@ -84,8 +85,8 @@ async function loadTables() {
         <div class="spread">
           <strong>${esc(t.name)}</strong>
           <span class="row">
-            <button class="secondary" onclick="openRows(${t.id})">Open</button>
-            <button class="danger" onclick="delTable(${t.id})">Delete</button>
+            <button class="secondary" data-click="openRows:${t.id}">Open</button>
+            <button class="danger" data-click="delTable:${t.id}">Delete</button>
           </span>
         </div>
         <div class="muted">${t.fields.map(f => esc(f.name) + ' (' + f.kind + ')').join(' · ')}</div>
@@ -106,13 +107,13 @@ async function openRows(id) {
       const v = r['f_' + f.id];
       return '<td>' + esc(v === null || v === undefined ? '' : String(v)) + '</td>';
     }).join('') +
-      '<td><button class="danger" onclick="delRow(' + id + ',' + r.id + ')">×</button></td></tr>').join('');
-    const addForm = '<div class="row" style="margin-top:10px">' +
-      t.fields.map(f => `<input id="add_${f.id}" placeholder="${esc(f.name)} (${f.kind})" style="max-width:170px">`).join('') +
-      '<button onclick="addRow(' + id + ')">Add row</button></div>';
+      '<td><button class="danger" data-click="delRow:' + id + ':' + r.id + '">×</button></td></tr>').join('');
+    const addForm = '<div class="row s-margin-top-10px">' +
+      t.fields.map(f => `<input id="add_${f.id}" placeholder="${esc(f.name)} (${f.kind})" class="s-max-width-170px">`).join('') +
+      '<button data-click="addRow:' + id + '">Add row</button></div>';
     document.getElementById('rowsview').innerHTML =
-      '<div class="card"><h2 style="margin-top:0">' + esc(t.name) + '</h2>' +
-      '<div style="overflow-x:auto"><table><thead>' + headers + '</thead><tbody>' + body + '</tbody></table></div>' + addForm + '</div>';
+      '<div class="card"><h2 class="mt0">' + esc(t.name) + '</h2>' +
+      '<div class="scroll-x"><table><thead>' + headers + '</thead><tbody>' + body + '</tbody></table></div>' + addForm + '</div>';
   } catch (e) { fail(e); }
 }
 function coerce(kind, raw) {

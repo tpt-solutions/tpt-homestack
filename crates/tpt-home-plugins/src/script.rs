@@ -33,8 +33,9 @@ use boa_engine::{
 };
 
 use crate::host::{HostError, HostResult, HostServices};
-use crate::manifest::{Permissions, PluginManifest};
+use crate::manifest::{Limits, Permissions, PluginManifest};
 use crate::runtime::{PluginRequest, PluginResponse};
+use crate::script_worker;
 
 /// Largest accepted script source.
 pub const MAX_SOURCE_BYTES: usize = 1024 * 1024;
@@ -97,14 +98,24 @@ const PRELUDE: &str = r#"
     kvDel: __tpt_kv_del,
     storageRead: __tpt_storage_read,
     storageWrite: __tpt_storage_write,
+    now: __tpt_now,
+    http: __tpt_http,
+    notify: __tpt_notify,
   };
   for (const name of ["__tpt_log", "__tpt_db_query", "__tpt_db_execute", "__tpt_kv_get",
-      "__tpt_kv_set", "__tpt_kv_del", "__tpt_storage_read", "__tpt_storage_write"]) {
+      "__tpt_kv_set", "__tpt_kv_del", "__tpt_storage_read", "__tpt_storage_write", "__tpt_now",
+      "__tpt_http", "__tpt_notify"]) {
     delete globalThis[name];
   }
   const parse = (text) => (text === null ? null : JSON.parse(text));
   const tpt = Object.freeze({
     log: (...parts) => raw.log(parts.map((p) => String(p)).join(" ")),
+    now: () => parse(raw.now()),
+    notify: (channel, message) => raw.notify(String(channel), String(message)),
+    http: Object.freeze({
+      get: (url) => parse(raw.http("GET", String(url), undefined)),
+      post: (url, body) => parse(raw.http("POST", String(url), String(body))),
+    }),
     db: Object.freeze({
       query: (sql) => parse(raw.dbQuery(String(sql))),
       execute: (sql) => raw.dbExecute(String(sql)),
@@ -145,9 +156,14 @@ const ENTRY: &str = r#"
 
 /// Run a script plugin's `handle` for `request`.
 ///
+/// When a worker executable is configured (see
+/// [`script_worker::set_worker_exe`]), the call runs in a child process under
+/// an operating-system memory limit. Otherwise it runs in this process, where
+/// memory is not capped.
+///
 /// Every failure is an `Err`: syntax, runtime errors, exceeded loop or
-/// recursion limits, and a passed deadline. The deadline message is the one
-/// case the caller can rely on, because it is reported from the host flag.
+/// recursion limits, a passed deadline, and in a worker a crash or memory
+/// stop. The deadline message is the one case the caller can rely on.
 pub fn call_script(
     script: &ScriptSource,
     manifest: &PluginManifest,
@@ -157,13 +173,45 @@ pub fn call_script(
     db_path: &Path,
     storage_dir: &Path,
 ) -> Result<PluginResponse, anyhow::Error> {
-    let deadline = Instant::now() + Duration::from_millis(manifest.limits.max_millis);
+    if let Some(exe) = script_worker::worker_exe() {
+        let job = script_worker::Job {
+            source: script.source.clone(),
+            limits: manifest.limits.clone(),
+            plugin_id: plugin_id.to_string(),
+            perms: perms.clone(),
+            request: request.clone(),
+            db_path: db_path.to_path_buf(),
+            storage_dir: storage_dir.to_path_buf(),
+        };
+        return script_worker::run_isolated(exe, &job);
+    }
+    call_in_process(
+        script,
+        &manifest.limits,
+        request,
+        plugin_id,
+        perms,
+        db_path,
+        storage_dir,
+    )
+}
+
+/// Run a script in this process. Used directly, and by the worker process.
+pub(crate) fn call_in_process(
+    script: &ScriptSource,
+    limits: &Limits,
+    request: &PluginRequest,
+    plugin_id: &str,
+    perms: &Permissions,
+    db_path: &Path,
+    storage_dir: &Path,
+) -> Result<PluginResponse, anyhow::Error> {
+    let deadline = Instant::now() + Duration::from_millis(limits.max_millis);
     let mut context = Context::default();
     {
-        let limits = context.runtime_limits_mut();
-        limits
-            .set_loop_iteration_limit((manifest.limits.max_fuel / FUEL_PER_LOOP_ITERATION).max(1));
-        limits.set_recursion_limit(RECURSION_LIMIT);
+        let runtime = context.runtime_limits_mut();
+        runtime.set_loop_iteration_limit((limits.max_fuel / FUEL_PER_LOOP_ITERATION).max(1));
+        runtime.set_recursion_limit(RECURSION_LIMIT);
     }
     context.insert_data(ScriptHost {
         services: RefCell::new(HostServices::new(
@@ -223,8 +271,15 @@ fn failure(context: &Context, error: JsError) -> anyhow::Error {
 }
 
 fn install_natives(context: &mut Context) -> JsResult<()> {
-    let natives: [(&str, usize, NativeFunction); 8] = [
+    let natives: [(&str, usize, NativeFunction); 11] = [
         ("__tpt_log", 1, NativeFunction::from_fn_ptr(native_log)),
+        (
+            "__tpt_notify",
+            2,
+            NativeFunction::from_fn_ptr(native_notify),
+        ),
+        ("__tpt_http", 3, NativeFunction::from_fn_ptr(native_http)),
+        ("__tpt_now", 0, NativeFunction::from_fn_ptr(native_now)),
         (
             "__tpt_db_query",
             1,
@@ -307,6 +362,37 @@ fn native_log(_this: &JsValue, args: &[JsValue], context: &mut Context) -> JsRes
         host_of(context)?.services.borrow_mut().log(message),
     )?;
     Ok(JsValue::undefined())
+}
+
+fn native_http(_this: &JsValue, args: &[JsValue], context: &mut Context) -> JsResult<JsValue> {
+    let method = string_arg(args, 0, context)?;
+    let url = string_arg(args, 1, context)?;
+    let body = match args.get_or_undefined(2) {
+        value if value.is_undefined() => None,
+        _ => Some(string_arg(args, 2, context)?),
+    };
+    let host = host_of(context)?;
+    let reply = settle(
+        host,
+        host.services
+            .borrow_mut()
+            .http_request(&method, &url, body.as_deref()),
+    )?;
+    json_or_null(reply)
+}
+
+fn native_notify(_this: &JsValue, args: &[JsValue], context: &mut Context) -> JsResult<JsValue> {
+    let channel = string_arg(args, 0, context)?;
+    let message = string_arg(args, 1, context)?;
+    let host = host_of(context)?;
+    let sent = settle(host, host.services.borrow_mut().notify(&channel, &message))?;
+    Ok(JsValue::from(sent.unwrap_or(false)))
+}
+
+fn native_now(_this: &JsValue, _args: &[JsValue], context: &mut Context) -> JsResult<JsValue> {
+    let host = host_of(context)?;
+    let now = settle(host, host.services.borrow_mut().now())?;
+    json_or_null(now)
 }
 
 fn native_db_query(_this: &JsValue, args: &[JsValue], context: &mut Context) -> JsResult<JsValue> {

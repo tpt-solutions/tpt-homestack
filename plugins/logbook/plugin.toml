@@ -1,0 +1,63 @@
+# Logbook: dated entries with a label and a number, with totals and grouped
+# summaries. JavaScript port of the `logbook` starter template
+# (crates/tpt-home-cli/templates/logbook). The monthly and per-label cards use
+# grouped metrics.
+# Pack with `tpt-home plugin build plugins/logbook`; install with db granted.
+
+[plugin]
+id = "logbook"
+name = "Logbook"
+version = "0.1.0"
+entry = "main.js"
+runtime = "js"
+
+[permissions]
+db = true
+
+[limits]
+max_fuel = 50000000
+max_memory_mb = 16
+
+[[tables]]
+name = "entries"
+columns = [
+    { name = "logged_on", kind = "text" },
+    { name = "label", kind = "text" },
+    { name = "value", kind = "real" },
+    { name = "notes", kind = "text" },
+    { name = "created_at", kind = "integer" },
+]
+
+[[pages]]
+path = "/summary"
+title = "Summary"
+kind = "summary"
+metrics = [
+    { label = "Entries", sql = "SELECT COUNT(*) FROM logbook_entries" },
+    { label = "Total", sql = "SELECT SUM(value) FROM logbook_entries" },
+    { label = "Average", sql = "SELECT AVG(value) FROM logbook_entries" },
+    { label = "Latest", sql = "SELECT logged_on FROM logbook_entries ORDER BY logged_on DESC, id DESC LIMIT 1" },
+    { label = "Total by month", sql = "SELECT substr(logged_on, 1, 7), SUM(value) FROM logbook_entries GROUP BY substr(logged_on, 1, 7) ORDER BY substr(logged_on, 1, 7) DESC", grouped = true },
+    { label = "Entries by label", sql = "SELECT label, COUNT(*) FROM logbook_entries GROUP BY label ORDER BY COUNT(*) DESC, label", grouped = true },
+]
+
+[[pages]]
+path = "/list"
+title = "Entries"
+kind = "list"
+table = "entries"
+columns = ["logged_on", "label", "value", "notes"]
+
+[[pages]]
+path = "/new"
+title = "Add an entry"
+kind = "form"
+fields = ["logged_on", "label", "value", "notes"]
+action = "/entries"
+
+[[pages]]
+path = "/remove"
+title = "Delete an entry"
+kind = "form"
+fields = ["id"]
+action = "/delete"

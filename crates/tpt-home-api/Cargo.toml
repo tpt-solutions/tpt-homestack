@@ -13,6 +13,7 @@ tpt-home-core = { workspace = true }
 tpt-home-ui = { workspace = true }
 axum = { workspace = true }
 tokio = { workspace = true }
+tokio-util = { workspace = true }
 tower-http = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
@@ -21,6 +22,10 @@ tracing-subscriber = { workspace = true }
 anyhow = { workspace = true }
 chrono = { workspace = true }
 tower = { workspace = true }
+sqlx = { workspace = true }
+uuid = { workspace = true }
+mdns-sd = "0.21.5"
+fs4 = { version = "1.1.0", features = ["sync"] }
 
 [dev-dependencies]
 http-body-util = "0.1"

@@ -8,7 +8,7 @@
 //! and a cron-style background task that deletes expired files.
 
 use tpt_home_core::prelude::*;
-use tpt_home_macros::{blueprint, bp_migration, bp_route, bp_ui_route};
+use tpt_home_macros::{blueprint, bp_job, bp_migration, bp_route, bp_ui_route};
 
 pub mod api;
 pub mod cleanup;
@@ -97,12 +97,11 @@ async fn drop_view(axum::Extension(user): axum::Extension<AuthUser>) -> impl Int
     page::drop_page(&user)
 }
 
-// Background expiry cleanup, started by the server via StartupEntry.
-tpt_home_core::inventory::submit! {
-    StartupEntry {
-        name: "drop-expiry-cleanup",
-        spawn: cleanup::spawn_cleanup_loop,
-    }
+/// Delete expired shares and their files, once a minute.
+#[bp_job(every = "1m", name = "drop-expiry-cleanup")]
+async fn expire_files(db: DbPool) -> Result<(), ApiError> {
+    cleanup::sweep(&db).await?;
+    Ok(())
 }
 
 /// Link anchor for the binary: see `tpt-home-cli`'s `BLUEPRINT_LINK_ANCHORS`.

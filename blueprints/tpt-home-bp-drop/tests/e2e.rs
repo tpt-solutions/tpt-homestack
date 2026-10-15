@@ -228,6 +228,7 @@ async fn multipart_upload_streams_and_downloads() {
         )
         .header("content-length", body.len())
         .header("cookie", &cookie)
+        .header("x-tpt-request", "1")
         .body(Body::from(body))
         .unwrap();
     let res = app.clone().oneshot(req).await.unwrap();

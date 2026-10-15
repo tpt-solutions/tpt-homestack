@@ -57,7 +57,8 @@ Your script defines a global `handle(req)` and returns:
 
 ```js
 function handle(req) {
-  // req: { method, path, query, body }   path is relative to /api/<id>
+  // req: { method, path, query, body, user? }   path is relative to /api/<id>
+  // user: { id, username, role } for the caller; absent when there is none
   return { status: 200, content_type: "application/json", body: "[]" };
 }
 ```
@@ -72,6 +73,9 @@ The only host object is the frozen global `tpt`. The typings are in
 | `tpt.kv.get/set/del` | `kv` | value or `null`; `true`/`false` for writes |
 | `tpt.storage.read/write` | `storage` | file text or `null`; `true`/`false` |
 | `tpt.log(...)` | none | nothing (100 lines kept per call) |
+| `tpt.now()` | none | `{unix, local_date, local_hour, local_minute, utc_offset_minutes}` (server local zone) |
+| `tpt.notify(channel, text)` | `notify` + declared channel | `true` when the admin's channel answered 2xx, else `false`. Sends `{"text": ...}` as JSON, max 2000 characters |
+| `tpt.http.get/post(url, body?)` | `http` + declared host | `{status, body}`, or `null`. `http://` always; `https://` in builds with the `https` feature (the default CLI). A bare declared host admits only the scheme's default port (80 or 443) |
 
 Denied or failed calls never throw. Check for `null`/`false`.
 
@@ -89,11 +93,106 @@ Denied or failed calls never throw. Check for `null`/`false`.
 - **Source only:** the script is the whole program. Build nothing; the host
   parses it at install.
 
+## Summary pages
+
+A `summary` page shows metric cards, each computed from one scoped SELECT. No
+handler code is needed:
+
+```toml
+[[pages]]
+path = "/summary"
+title = "Summary"
+kind = "summary"
+metrics = [
+    { label = "Items", sql = "SELECT COUNT(*) FROM notes_quick_notes" },
+    { label = "Average", sql = "SELECT AVG(qty) FROM notes_quick_items" },
+]
+```
+
+Up to 12 metrics. Each SQL must be one SELECT that passes the table-scope
+rules, checked at install. The first column of the first row is shown: an
+integer as is, a float to two decimals, and an empty result as an em dash.
+Grouped metrics (one row per day or category) are not supported yet.
+
+## Signed inbound endpoints
+
+A sensor or service can post events to a plugin without a login. Declare the
+endpoint in the manifest:
+
+```toml
+[[hooks]]
+name = "feed"          # part of the URL: /api/plugin-hooks/<id>/feed
+```
+
+An admin creates the secret once, and it is shown once:
+`POST /api/plugins/<id>/hooks/feed/secret` returns `{"secret", "url"}`.
+Rotating it replaces the old secret at once.
+
+The sender signs each request with HMAC-SHA256 over `"<timestamp>.<body>"`,
+using the secret, and sends the Unix time and the hex digest in
+`X-Tpt-Timestamp` and `X-Tpt-Signature`. It must send `Content-Type:
+application/json` (the server's content-type guard refuses other types). The
+host checks the signature, and that the timestamp is within 5 minutes of the
+server clock, then calls your handler at `POST /hooks/feed` with the body as
+text in `req.body`. Your handler returns `200` to accept, and the sender gets
+`202`. A handler failure gives the sender `500`.
+
+Every refusal is the same `401`: unknown plugin, disabled plugin, undeclared
+hook, no secret, or a bad signature. Replays inside the 5-minute window are
+not caught. Uninstalling the plugin deletes its secrets.
+
+## Notification channels
+
+An admin creates a named channel once, with the target URL (for example a
+chat webhook). The URL is kept as plain text and is never listed again.
+
+```sh
+curl -H "Authorization: Bearer $ADMIN_TOKEN" -H "Content-Type: application/json"      -d '{"name":"alerts","url":"https://chat.example/hook/XYZ"}'      http://127.0.0.1:8080/api/notify/channels
+```
+
+A plugin names the channels it may use, and the admin approves `notify`:
+
+```toml
+[permissions]
+notify = true
+notify_channels = ["alerts"]
+```
+
+Each send records its outcome on the channel (`last_sent_at`, `last_error`),
+which `GET /api/notify/channels` shows (admin only). Replacing a channel's URL
+clears that state. Deleting a channel is `DELETE /api/notify/channels/<name>`.
+
+## A complete example
+
+`plugins/sensor-alerts` uses every mechanism above: a signed `[[hooks]]`
+feed, a one-minute `[[jobs]]` check, `tpt.notify` to the `alerts` channel,
+`tpt.now()` for quiet hours, kv settings checked against `req.user.role`, and
+a summary and list page. Read it before writing a plugin that does several
+of these at once.
+
+## Scheduled jobs
+
+A plugin can run a handler on a timer. Declare it in the manifest:
+
+```toml
+[[jobs]]
+name = "sweep"        # unique in the plugin; for logs
+every = "5m"          # count + s|m|h|d, at least 10s
+path = "/sweep"       # handler below /api/<id>, called as POST with no caller
+```
+
+The host calls `POST /api/<id>/sweep` once per interval while the plugin is
+enabled. The first run is one interval after the server first sees the job,
+and jobs never overlap: a job waits for its previous run to finish. Each run
+is bounded by `max_millis`, plus one second. A job's handler gets no `user`,
+so it must not rely on a caller. Up to 10 jobs per plugin. Results are logged;
+they are not yet shown on the admin jobs page.
+
 ## Packaging and installing
 
 ```sh
 tpt-home plugin build my-plugin                  # writes notes_quick-0.1.0.tptp
-curl -H "Authorization: Bearer $ADMIN_TOKEN" -F approve=db -F package=@notes_quick-0.1.0.tptp \
+curl -H "Authorization: Bearer $ADMIN_TOKEN" -H "X-TPT-Request: 1" -F approve=db -F package=@notes_quick-0.1.0.tptp \
      http://127.0.0.1:8080/api/plugins/install
 curl -X POST -H "Content-Type: application/json" -H "Authorization: Bearer $ADMIN_TOKEN" \
      -d '{}' http://127.0.0.1:8080/api/plugins/notes_quick/enable

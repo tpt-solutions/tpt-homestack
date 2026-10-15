@@ -580,3 +580,208 @@ async fn cookie_sessions_still_work_alongside_tokens() {
         .unwrap();
     assert_eq!(me.status(), StatusCode::OK);
 }
+
+/// Router with `trust_proxy` set, over a fresh database.
+async fn router_with_trust_proxy(trust: bool) -> axum::Router {
+    tpt_home_core::config::set_global_for_tests(test_config().clone());
+    let db: DbPool = connect_in_memory().await.unwrap();
+    tpt_home_core::migrate::run_all(&db).await.unwrap();
+    let cfg = Config {
+        trust_proxy: trust,
+        ..test_config().clone()
+    };
+    build_router(db, &cfg)
+}
+
+/// Sends `n` requests to the same route, each with a different forwarded
+/// client address, and returns the status of the last one.
+async fn send_with_forwarded_ips(app: &axum::Router, n: u32) -> StatusCode {
+    let mut last = StatusCode::OK;
+    for i in 0..n {
+        let res = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .uri("/api/auth/me")
+                    .header("x-forwarded-for", format!("198.51.100.{}", i % 250))
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        last = res.status();
+    }
+    last
+}
+
+#[tokio::test]
+async fn forwarded_header_ignored_without_trust_proxy() {
+    // Without a proxy, every request shares the peer's bucket, so spoofing a
+    // new X-Forwarded-For per request cannot get past the 240-per-minute limit.
+    let app = router_with_trust_proxy(false).await;
+    let status = send_with_forwarded_ips(&app, 241).await;
+    assert_eq!(status, StatusCode::TOO_MANY_REQUESTS);
+}
+
+#[tokio::test]
+async fn forwarded_header_keys_the_limiter_with_trust_proxy() {
+    // Behind a trusted proxy each forwarded client has its own bucket, so
+    // 241 requests from 250 distinct addresses are never limited.
+    let app = router_with_trust_proxy(true).await;
+    let status = send_with_forwarded_ips(&app, 241).await;
+    assert_ne!(status, StatusCode::TOO_MANY_REQUESTS);
+}
+
+#[tokio::test]
+async fn login_attempts_are_limited_per_client() {
+    // Guessing passwords is capped well below the general API limit.
+    // Each attempt uses a different name, so the per-account lockout cannot
+    // trigger and only the per-client limit is measured.
+    let app = router_with_trust_proxy(false).await;
+    let attempt = |i: u32| {
+        json_request(
+            "POST",
+            "/api/auth/login",
+            json!({"username": format!("nobody-{i}"), "password": "wrong-guess"}),
+            None,
+        )
+    };
+    for i in 0..tpt_home_core::middleware::LOGIN_MAX_DEFAULT {
+        let res = app.clone().oneshot(attempt(i)).await.unwrap();
+        assert_eq!(res.status(), StatusCode::UNAUTHORIZED);
+    }
+    let res = app.clone().oneshot(attempt(999)).await.unwrap();
+    assert_eq!(res.status(), StatusCode::TOO_MANY_REQUESTS);
+}
+
+#[tokio::test]
+async fn repeated_wrong_passwords_lock_the_account_for_every_client() {
+    // Ten failures lock the name even though the requests have no client
+    // address, and the locked name is refused without checking the password.
+    let app = router_with_trust_proxy(false).await;
+    let name = "lockout-integration-victim";
+    let attempt = |password: &str| {
+        json_request(
+            "POST",
+            "/api/auth/login",
+            json!({"username": name, "password": password}),
+            None,
+        )
+    };
+    for _ in 0..tpt_home_core::auth::lockout::MAX_FAILURES {
+        let res = app.clone().oneshot(attempt("wrong-guess")).await.unwrap();
+        assert_eq!(res.status(), StatusCode::UNAUTHORIZED);
+    }
+    let res = app.clone().oneshot(attempt("wrong-guess")).await.unwrap();
+    assert_eq!(res.status(), StatusCode::TOO_MANY_REQUESTS);
+    let res = app.oneshot(attempt("the-right-password")).await.unwrap();
+    assert_eq!(res.status(), StatusCode::TOO_MANY_REQUESTS);
+}
+
+#[tokio::test]
+async fn multipart_requires_the_custom_request_header() {
+    // A cross-site form can send multipart but cannot set X-TPT-Request, so
+    // without the header the request is refused before routing.
+    let app = router().await;
+    let multipart = |header: bool| {
+        let mut b = Request::builder()
+            .method("POST")
+            .uri("/api/drop/upload")
+            .header("content-type", "multipart/form-data; boundary=x");
+        if header {
+            b = b.header("x-tpt-request", "1");
+        }
+        b.body(Body::from("--x--\r\n")).unwrap()
+    };
+    let res = app.clone().oneshot(multipart(false)).await.unwrap();
+    assert_eq!(res.status(), StatusCode::UNSUPPORTED_MEDIA_TYPE);
+
+    let res = app.oneshot(multipart(true)).await.unwrap();
+    assert_ne!(res.status(), StatusCode::UNSUPPORTED_MEDIA_TYPE);
+}
+
+#[tokio::test]
+async fn html_pages_allow_only_nonced_scripts() {
+    // Inline script injected into a page must not run: the policy names a
+    // per-response nonce, and every script tag the server writes carries it.
+    let app = router().await;
+    let cookie = setup_and_login(&app).await;
+    let res = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri("/welcome")
+                .header("cookie", &cookie)
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(res.status(), StatusCode::OK);
+    let csp = res
+        .headers()
+        .get("content-security-policy")
+        .unwrap()
+        .to_str()
+        .unwrap()
+        .to_string();
+    assert!(!csp.contains("script-src 'self' 'unsafe-inline'"), "{csp}");
+    let nonce = csp
+        .split("'nonce-")
+        .nth(1)
+        .and_then(|rest| rest.split('\'').next())
+        .expect("policy names a nonce");
+    let bytes = res.into_body().collect().await.unwrap().to_bytes();
+    let html = String::from_utf8_lossy(&bytes);
+    assert!(
+        html.contains(&format!("<script nonce=\"{nonce}\">")),
+        "no nonced script"
+    );
+    assert!(!html.contains("<script>"), "a script tag without the nonce");
+    // Styles: no inline style attributes, and the shell's <style> is nonced.
+    assert!(!csp.contains("style-src 'self' 'unsafe-inline'"), "{csp}");
+    assert!(
+        csp.contains(&format!("style-src 'self' 'nonce-{nonce}'")),
+        "{csp}"
+    );
+    assert!(
+        html.contains(&format!("<style nonce=\"{nonce}\">")),
+        "no nonced style"
+    );
+    assert!(!html.contains(" style=\""), "an inline style attribute");
+}
+
+#[tokio::test]
+async fn each_response_gets_a_fresh_nonce() {
+    let app = router().await;
+    let mut nonces = Vec::new();
+    for _ in 0..2 {
+        let res = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .uri("/login")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        let csp = res
+            .headers()
+            .get("content-security-policy")
+            .unwrap()
+            .to_str()
+            .unwrap()
+            .to_string();
+        nonces.push(
+            csp.split("'nonce-")
+                .nth(1)
+                .unwrap()
+                .split('\'')
+                .next()
+                .unwrap()
+                .to_string(),
+        );
+    }
+    assert_ne!(nonces[0], nonces[1], "a nonce must not be reused");
+}

@@ -32,6 +32,7 @@ fn request() -> PluginRequest {
         path: "/".into(),
         query: String::new(),
         body: None,
+        user: None,
     }
 }
 

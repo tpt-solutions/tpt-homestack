@@ -25,14 +25,17 @@ clap_complete = { workspace = true }
 tokio = { workspace = true }
 sqlx = { workspace = true }
 serde_json = { workspace = true }
+toml = { workspace = true }
 anyhow = { workspace = true }
 tracing = { workspace = true }
 uuid = { workspace = true }
+mimalloc = "0.1.52"
 
 [features]
-default = ["js"]
+default = ["js", "https"]
 # JS script plugins (Boa). Disable with --no-default-features for a smaller build.
 js = ["tpt-home-plugins/js"]
+https = ["tpt-home-plugins/https"]
 
 [dev-dependencies]
 tempfile = "3"

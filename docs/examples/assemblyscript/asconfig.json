@@ -1,0 +1,15 @@
+{
+  "targets": {
+    "release": {
+      "outFile": "plugin.wasm",
+      "optimize": true,
+      "runtime": "stub",
+      "noAssert": true,
+      "sourceMap": false,
+      "use": ["abort=assembly/index/abortTrap"]
+    }
+  },
+  "options": {
+    "bindings": "esm"
+  }
+}

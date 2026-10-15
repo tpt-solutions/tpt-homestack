@@ -1,0 +1,12 @@
+# Manifest for the AssemblyScript example. The wasm module is plugin.wasm, built
+# from assembly/index.ts with `npm run build`. The routes live in the module, so
+# the manifest only declares identity and the (empty) permissions.
+
+[plugin]
+id = "hello_as"
+name = "Hello (AssemblyScript)"
+version = "0.1.0"
+entry = "plugin.wasm"
+api_version = 1
+
+[permissions]

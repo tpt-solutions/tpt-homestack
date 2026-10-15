@@ -77,6 +77,7 @@ fn caller(scopes: &[&str]) -> Caller {
             role: Role::Admin,
         },
         scopes: scopes.iter().map(|s| s.to_string()).collect(),
+        forward: Vec::new(),
     }
 }
 
@@ -247,4 +248,112 @@ async fn batches_return_one_reply_per_request() {
     ]);
     let r = handle(&caller(&["api"]), &batch).await.expect("replies");
     assert_eq!(r.as_array().unwrap().len(), 2);
+}
+
+// Transport tests: the stdio line framing and the HTTP endpoint, driven
+// through the same handler the server uses.
+
+fn with_user(scopes: Option<&[&str]>) -> axum::Router {
+    use axum::Extension;
+    use tpt_home_core::auth::api_token::TokenScopes;
+
+    let user = AuthUser {
+        id: 1,
+        username: "alice".into(),
+        role: Role::Admin,
+    };
+    let mut router = tpt_home_mcp::http_router().layer(Extension(user));
+    if let Some(scopes) = scopes {
+        router = router.layer(Extension(TokenScopes(
+            scopes.iter().map(|s| s.to_string()).collect(),
+        )));
+    }
+    router
+}
+
+async fn post_mcp(router: axum::Router, body: &str) -> (axum::http::StatusCode, Value) {
+    use axum::body::Body;
+    use axum::http::Request;
+    use http_body_util::BodyExt;
+    use tower::ServiceExt;
+
+    let req = Request::builder()
+        .method("POST")
+        .uri("/api/mcp")
+        .header("content-type", "application/json")
+        .body(Body::from(body.to_string()))
+        .unwrap();
+    let res = router.oneshot(req).await.unwrap();
+    let status = res.status();
+    let bytes = res.into_body().collect().await.unwrap().to_bytes();
+    (
+        status,
+        serde_json::from_slice(&bytes).unwrap_or(Value::Null),
+    )
+}
+
+#[tokio::test]
+async fn stdio_lines_get_one_reply_each_and_skip_notifications() {
+    let c = caller(&["api"]);
+    let line = rpc("initialize", json!({})).to_string();
+    let text = tpt_home_mcp::stdio_reply(&c, &line).await.expect("a reply");
+    assert!(text.ends_with('\n'), "replies are newline-terminated");
+    assert_eq!(text.matches('\n').count(), 1, "one reply, one line");
+    let r: Value = serde_json::from_str(text.trim_end()).unwrap();
+    assert_eq!(r["id"], 1);
+    assert_eq!(r["result"]["serverInfo"]["name"], "tpt-homestack");
+
+    let note = json!({ "jsonrpc": "2.0", "method": "notifications/initialized" }).to_string();
+    assert!(tpt_home_mcp::stdio_reply(&c, &note).await.is_none());
+    assert!(tpt_home_mcp::stdio_reply(&c, "   ").await.is_none());
+}
+
+#[tokio::test]
+async fn stdio_bad_json_gets_a_parse_error_and_the_loop_survives() {
+    let c = caller(&["api"]);
+    let text = tpt_home_mcp::stdio_reply(&c, "{not json")
+        .await
+        .expect("a parse error reply");
+    let r: Value = serde_json::from_str(text.trim_end()).unwrap();
+    assert_eq!(r["error"]["code"], -32700);
+    assert!(r["id"].is_null());
+
+    // The next line is still served.
+    let text = tpt_home_mcp::stdio_reply(&c, &rpc("initialize", json!({})).to_string())
+        .await
+        .expect("a reply after the bad line");
+    assert!(text.contains("serverInfo"));
+}
+
+#[tokio::test]
+async fn http_endpoint_answers_requests_and_accepts_notifications() {
+    register_fixture();
+    let (status, r) = post_mcp(with_user(None), &rpc("tools/list", json!({})).to_string()).await;
+    assert_eq!(status, axum::http::StatusCode::OK);
+    assert!(tool_names(&r).contains(&"fixture_add".to_string()));
+
+    let note = json!({ "jsonrpc": "2.0", "method": "notifications/initialized" }).to_string();
+    let (status, _) = post_mcp(with_user(None), &note).await;
+    assert_eq!(status, axum::http::StatusCode::ACCEPTED);
+}
+
+#[tokio::test]
+async fn http_endpoint_rejects_invalid_json_with_400() {
+    let (status, r) = post_mcp(with_user(None), "{oops").await;
+    assert_eq!(status, axum::http::StatusCode::BAD_REQUEST);
+    assert_eq!(r["error"]["code"], -32700);
+}
+
+#[tokio::test]
+async fn http_token_scope_limits_which_plugin_tools_are_listed() {
+    register_fixture();
+    // A token scoped to some other plugin must not see the fixture's tools.
+    let (status, r) = post_mcp(
+        with_user(Some(&["plugin:other"])),
+        &rpc("tools/list", json!({})).to_string(),
+    )
+    .await;
+    assert_eq!(status, axum::http::StatusCode::OK);
+    let names = tool_names(&r);
+    assert!(!names.contains(&"fixture_add".to_string()), "{names:?}");
 }
